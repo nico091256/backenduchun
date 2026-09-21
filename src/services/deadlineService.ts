@@ -77,7 +77,7 @@ class DeadlineService {
           docNumber: step.document.docNumber,
           role: 'approver',
           stepOrder: step.stepOrder,
-        }).catch(() => {});
+        }).catch(() => { });
 
         // Telegram — yaratuvchiga
         telegramService.sendDeadlineExpired(step.document.creatorId, {
@@ -86,7 +86,7 @@ class DeadlineService {
           docNumber: step.document.docNumber,
           role: 'creator',
           stepOrder: step.stepOrder,
-        }).catch(() => {});
+        }).catch(() => { });
       }
 
       // 2. Umumiy muddati o'tgan hujjatlarni EXPIRED qilish
@@ -130,7 +130,7 @@ class DeadlineService {
           title: doc.title,
           docNumber: doc.docNumber,
           role: 'creator',
-        }).catch(() => {});
+        }).catch(() => { });
 
         // Agar mas'ul ijrochi bo'lsa va u yaratuvchining o'zi bo'lmasa, ijrochiga ham bildirishnoma
         if (doc.executorId && doc.executorId !== doc.creatorId) {
@@ -151,7 +151,7 @@ class DeadlineService {
             title: doc.title,
             docNumber: doc.docNumber,
             role: 'executor',
-          }).catch(() => {});
+          }).catch(() => { });
         }
       }
 
@@ -187,7 +187,7 @@ class DeadlineService {
             docNumber: step.document.docNumber,
             deadline: step.stepDeadline,
             role: 'approver',
-          }).catch(() => {});
+          }).catch(() => { });
         }
 
         await prisma.approvalStep.update({
