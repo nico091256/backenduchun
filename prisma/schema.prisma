@@ -1,0 +1,220 @@
+// This is your Prisma schema file.
+// BPM — Hujjatlarni Tasdiqlash va Ijro Nazorati Tizimi
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────
+// FOYDALANUVCHI
+// ─────────────────────────────────────────────
+model User {
+  id             Int      @id @default(autoincrement())
+  fullName       String
+  email          String   @unique
+  password       String   // bcrypt hash
+  role           String   @default("INITIATOR")
+  department     String?
+  position       String?
+  phone          String?
+  avatar         String?
+  isActive       Boolean  @default(true)
+  permissions    String?  @default("[]")
+  telegramChatId String?  // Telegram Chat ID xabarlar yuborish uchun
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // Relations
+  createdDocuments    Document[]     @relation("DocumentCreator")
+  executedDocuments   Document[]     @relation("DocumentExecutor")
+  approvalSteps       ApprovalStep[] @relation("StepApprover")
+  taskHistories       TaskHistory[]  @relation("HistoryActor")
+  notifications       Notification[] @relation("UserNotifications")
+  refreshTokens       RefreshToken[]
+
+  @@map("users")
+}
+
+
+
+// ─────────────────────────────────────────────
+// ASOSIY HUJJAT
+// ─────────────────────────────────────────────
+model Document {
+  id               Int              @id @default(autoincrement())
+  docNumber        String           @unique // BPM-2024-0001
+  title            String
+  description      String
+  category         String           @default("Umumiy")
+  fileUrl          String?          // Biriktirilgan fayl manzili
+  fileName         String?
+  fileSize         Int?
+
+  status           String           @default("DRAFT")
+  priority         String           @default("NORMAL")
+
+  // Deadline
+  overallDeadline  DateTime?        // Umumiy yakuniy muddat
+
+  // Ijro natijasi
+  executionNote    String?
+  executionFileUrl String?
+  executionFileName String?
+
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  submittedAt      DateTime?        // Tasdiqlashga yuborilgan vaqt
+  completedAt      DateTime?        // Yakunlangan vaqt
+
+  // Foreign Keys
+  creatorId        Int
+  creator          User             @relation("DocumentCreator", fields: [creatorId], references: [id], onDelete: Restrict)
+  
+  executorId       Int?
+  executor         User?            @relation("DocumentExecutor", fields: [executorId], references: [id], onDelete: SetNull)
+
+  // Hujjat turi: INCOMING (Kiruvchi), OUTGOING (Chiquvchi), INTERNAL (Ichki)
+  docType          String           @default("INTERNAL")
+
+  // Kiruvchi hujjat maydonlari
+  senderOrg        String?          // Yuboruvchi tashkilot nomi
+  senderDocNumber  String?          // Yuboruvchining xat raqami
+  senderDate       DateTime?        // Yuboruvchining xat sanasi
+  resolution       String?          // Rahbar rezolyutsiyasi / ko'rsatmasi
+
+  // Chiquvchi hujjat maydonlari
+  recipientOrg     String?          // Qabul qiluvchi tashkilot nomi
+  deliveryMethod   String?          // Yetkazish usuli: EMAIL, COURIER, POST, ELECTRONIC
+
+  // Bog'langan hujjatlar (Linked / Parent-Child documents)
+  parentDocId      Int?
+  parentDoc        Document?        @relation("DocumentRelation", fields: [parentDocId], references: [id], onDelete: SetNull)
+  childDocs        Document[]       @relation("DocumentRelation")
+
+  // Relations
+  approvalSteps    ApprovalStep[]
+  history          TaskHistory[]
+  notifications    Notification[]
+  attachments      DocumentAttachment[]
+
+  @@map("documents")
+}
+
+// ─────────────────────────────────────────────
+// BIRIKTIRILGAN FAYLLAR (MULTI-ATTACHMENTS)
+// ─────────────────────────────────────────────
+model DocumentAttachment {
+  id           Int      @id @default(autoincrement())
+  fileUrl      String
+  fileName     String
+  fileSize     Int?
+  fileType     String?  @default("ATTACHMENT") // 'MAIN' | 'ATTACHMENT' | 'EXECUTION'
+  uploadedById Int?
+
+  documentId   Int
+  document     Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  createdAt    DateTime @default(now())
+
+  @@map("document_attachments")
+}
+
+
+
+// ─────────────────────────────────────────────
+// BOSQICHMA-BOSQICH TASDIQLASH ZANJIRI
+// ─────────────────────────────────────────────
+model ApprovalStep {
+  id           Int          @id @default(autoincrement())
+  stepOrder    Int          // 1, 2, 3...
+  stepStatus   String       @default("PENDING")
+
+  // Deadline ushbu bosqich uchun
+  stepDeadline DateTime?
+
+  // Tasdiqlovchi
+  approverId   Int
+  approver     User         @relation("StepApprover", fields: [approverId], references: [id], onDelete: Restrict)
+
+  // Tasdiqlovchining izohi
+  comment      String?
+
+  // Amal vaqti
+  actionDate   DateTime?
+
+  // Eslatma yuborilganmi?
+  reminderSent Boolean      @default(false)
+
+  // Foreign Keys
+  documentId   Int
+  document     Document     @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@unique([documentId, stepOrder])
+  @@map("approval_steps")
+}
+
+
+
+// ─────────────────────────────────────────────
+// AUDIT / HARAKATLAR TARIXI
+// ─────────────────────────────────────────────
+model TaskHistory {
+  id           Int      @id @default(autoincrement())
+  actionName   String   // CREATED, SUBMITTED, APPROVED_STEP_1, REJECTED, COMPLETED, etc.
+  description  String?
+  metadata     String?  // JSON string sifatida
+
+  performedById Int?
+  performedBy   User?   @relation("HistoryActor", fields: [performedById], references: [id], onDelete: SetNull)
+
+  documentId   Int
+  document     Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  createdAt    DateTime @default(now())
+
+  @@map("task_histories")
+}
+
+// ─────────────────────────────────────────────
+// IN-APP BILDIRISHNOMALAR
+// ─────────────────────────────────────────────
+model Notification {
+  id         Int      @id @default(autoincrement())
+  type       String   // APPROVAL_REQUEST, APPROVED, REJECTED, DEADLINE_WARNING, etc.
+  title      String
+  message    String
+  isRead     Boolean  @default(false)
+  link       String?  // /documents/:id
+
+  userId     Int
+  user       User     @relation("UserNotifications", fields: [userId], references: [id], onDelete: Cascade)
+
+  documentId Int?
+  document   Document? @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  createdAt  DateTime @default(now())
+
+  @@map("notifications")
+}
+
+// ─────────────────────────────────────────────
+// JWT REFRESH TOKENS
+// ─────────────────────────────────────────────
+model RefreshToken {
+  id        Int      @id @default(autoincrement())
+  token     String   @unique
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@map("refresh_tokens")
+}
