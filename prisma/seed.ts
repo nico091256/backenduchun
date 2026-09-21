@@ -3,158 +3,92 @@ import bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();
 
+// Demo account emaillar ro'yxati — bularni o'chiramiz
+const DEMO_EMAILS = [
+  'initiator@bpm.uz',
+  'approver1@bpm.uz',
+  'approver2@bpm.uz',
+  'executor@bpm.uz',
+  'admin@bpm.uz', // eski admin ham o'chiriladi, yangi yaratiladi
+];
+
 async function main() {
-  console.log('🌱 Seeding database...');
+  console.log('🧹 Demo accountlarni tozalash boshlandi...');
 
-  // Hash password
-  const password = await bcrypt.hash('Admin123!', 12);
+  // 1. Demo accountlarga bog'liq barcha ma'lumotlarni ketma-ket o'chiramiz
+  // (referential integrity sababli tartib muhim)
+  for (const email of DEMO_EMAILS) {
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (!user) continue;
 
-  // 1. Admin
-  const admin = await prisma.user.upsert({
-    where: { email: 'admin@bpm.uz' },
-    update: {},
-    create: {
-      fullName: 'Tizim Administratori',
-      email: 'admin@bpm.uz',
-      password,
+    // Foydalanuvchiga tegishli notification, refreshToken va boshqalarni o'chirish
+    await prisma.notification.deleteMany({ where: { userId: user.id } });
+    await prisma.refreshToken.deleteMany({ where: { userId: user.id } });
+
+    // Approval steps (bu user approver bo'lgan hujjatlarni topamiz)
+    const steps = await prisma.approvalStep.findMany({ where: { approverId: user.id }, select: { documentId: true } });
+    const docIds = steps.map(s => s.documentId);
+
+    if (docIds.length > 0) {
+      // Ushbu hujjatlarga bog'liq barcha ma'lumotlarni o'chirish
+      await prisma.notification.deleteMany({ where: { documentId: { in: docIds } } });
+      await prisma.taskHistory.deleteMany({ where: { documentId: { in: docIds } } });
+      await prisma.approvalStep.deleteMany({ where: { documentId: { in: docIds } } });
+      await prisma.document.deleteMany({ where: { id: { in: docIds } } });
+    }
+
+    // Foydalanuvchi yaratgan hujjatlarni ham o'chirish
+    const createdDocs = await prisma.document.findMany({ where: { creatorId: user.id }, select: { id: true } });
+    const createdDocIds = createdDocs.map(d => d.id);
+    if (createdDocIds.length > 0) {
+      await prisma.notification.deleteMany({ where: { documentId: { in: createdDocIds } } });
+      await prisma.taskHistory.deleteMany({ where: { documentId: { in: createdDocIds } } });
+      await prisma.approvalStep.deleteMany({ where: { documentId: { in: createdDocIds } } });
+      await prisma.document.deleteMany({ where: { id: { in: createdDocIds } } });
+    }
+
+    await prisma.taskHistory.deleteMany({ where: { performedById: user.id } });
+    await prisma.approvalStep.deleteMany({ where: { approverId: user.id } });
+
+    await prisma.user.delete({ where: { email } });
+    console.log(`   🗑️  Demo account o'chirildi: ${email}`);
+  }
+
+  console.log('\n✅ Barcha demo accountlar muvaffaqiyatli o\'chirildi.');
+
+  // 2. Yagona haqiqiy Admin hisobini yaratish
+  console.log('\n🔐 Haqiqiy Admin hisobi yaratilmoqda...');
+
+  const adminPassword = await bcrypt.hash('DiscoverBPM@2025', 14);
+
+  const admin = await prisma.user.create({
+    data: {
+      fullName: 'Bosh Administrator',
+      email: 'superadmin@discover.uz',
+      password: adminPassword,
       role: 'ADMIN',
-      department: 'IT Bo\'limi',
-      position: 'Tizim Administratori',
+      department: 'IT Boshqarmasi',
+      position: 'Tizim Bosh Administratori',
       phone: '+998901234567',
+      isActive: true,
     },
   });
 
-  // 2. Initiator (Tashabbuskor)
-  const initiator = await prisma.user.upsert({
-    where: { email: 'initiator@bpm.uz' },
-    update: {},
-    create: {
-      fullName: 'Alisher Toshmatov',
-      email: 'initiator@bpm.uz',
-      password,
-      role: 'INITIATOR',
-      department: 'Moliya Bo\'limi',
-      position: 'Bosh Moliyachi',
-      phone: '+998901234568',
-    },
-  });
-
-  // 3. Approver 1
-  const approver1 = await prisma.user.upsert({
-    where: { email: 'approver1@bpm.uz' },
-    update: {},
-    create: {
-      fullName: 'Dilnoza Yusupova',
-      email: 'approver1@bpm.uz',
-      password,
-      role: 'APPROVER',
-      department: 'Huquq Bo\'limi',
-      position: 'Yurist',
-      phone: '+998901234569',
-    },
-  });
-
-  // 4. Approver 2
-  const approver2 = await prisma.user.upsert({
-    where: { email: 'approver2@bpm.uz' },
-    update: {},
-    create: {
-      fullName: 'Bobur Karimov',
-      email: 'approver2@bpm.uz',
-      password,
-      role: 'APPROVER',
-      department: 'Rahbariyat',
-      position: 'Direktor O\'rinbosari',
-      phone: '+998901234570',
-    },
-  });
-
-  // 5. Executor (Ijrochi)
-  const executor = await prisma.user.upsert({
-    where: { email: 'executor@bpm.uz' },
-    update: {},
-    create: {
-      fullName: 'Sardor Rahimov',
-      email: 'executor@bpm.uz',
-      password,
-      role: 'EXECUTOR',
-      department: 'Texnik Bo\'lim',
-      position: 'Muhandis',
-      phone: '+998901234571',
-    },
-  });
-
-  console.log('✅ Users created:', { admin, initiator, approver1, approver2, executor });
-
-  // Demo hujjat
-  const doc = await prisma.document.create({
-    data: {
-      docNumber: 'BPM-2024-0001',
-      title: 'Yangi server xarid qilish to\'g\'risida buyurtma',
-      description: 'IT bo\'limi uchun 2 ta yangi server kompyuter sotib olish zaruriyati. Texnik talablar: 32GB RAM, 2TB SSD, Xeon protsessor.',
-      category: 'Jihoz so\'rovi',
-      priority: 'HIGH',
-      status: 'IN_APPROVAL',
-      overallDeadline: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 kun
-      creatorId: initiator.id,
-      submittedAt: new Date(),
-    },
-  });
-
-  // Approval chain
-  await prisma.approvalStep.createMany({
-    data: [
-      {
-        documentId: doc.id,
-        stepOrder: 1,
-        approverId: approver1.id,
-        stepStatus: 'PENDING',
-        stepDeadline: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000), // 3 kun
-      },
-      {
-        documentId: doc.id,
-        stepOrder: 2,
-        approverId: approver2.id,
-        stepStatus: 'PENDING',
-        stepDeadline: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000), // 5 kun
-      },
-    ],
-  });
-
-  // History
-  await prisma.taskHistory.create({
-    data: {
-      documentId: doc.id,
-      actionName: 'CREATED',
-      description: 'Hujjat yaratildi va tasdiqlashga yuborildi',
-      performedById: initiator.id,
-    },
-  });
-
-  // Notification (approver1 uchun)
-  await prisma.notification.create({
-    data: {
-      userId: approver1.id,
-      documentId: doc.id,
-      type: 'APPROVAL_REQUEST',
-      title: 'Yangi tasdiqlash so\'rovi',
-      message: `"${doc.title}" hujjati sizning tasdiqlashingizni kutmoqda.`,
-      link: `/documents/${doc.id}`,
-    },
-  });
-
-  console.log('✅ Demo document created:', doc.docNumber);
-  console.log('\n📧 Login ma\'lumotlari:');
-  console.log('  Admin:     admin@bpm.uz     | Admin123!');
-  console.log('  Initiator: initiator@bpm.uz | Admin123!');
-  console.log('  Approver1: approver1@bpm.uz | Admin123!');
-  console.log('  Approver2: approver2@bpm.uz | Admin123!');
-  console.log('  Executor:  executor@bpm.uz  | Admin123!');
+  console.log('\n════════════════════════════════════════════');
+  console.log('  ✅ Haqiqiy Admin hisobi muvaffaqiyatli yaratildi!');
+  console.log('════════════════════════════════════════════');
+  console.log(`  📧 Email   : ${admin.email}`);
+  console.log('  🔑 Parol   : DiscoverBPM@2025');
+  console.log(`  👤 Ism     : ${admin.fullName}`);
+  console.log(`  🆔 ID      : ${admin.id}`);
+  console.log('════════════════════════════════════════════');
+  console.log('  ⚠️  Parolni tizimga kirgandan keyin o\'zgartiring!');
+  console.log('════════════════════════════════════════════\n');
 }
 
 main()
   .catch((e) => {
-    console.error(e);
+    console.error('❌ Seed xatolik:', e);
     process.exit(1);
   })
   .finally(async () => {
