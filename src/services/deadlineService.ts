@@ -26,7 +26,7 @@ class DeadlineService {
           stepDeadline: { lt: now },
         },
         include: {
-          document: { select: { id: true, title: true, creatorId: true } },
+          document: { select: { id: true, title: true, creatorId: true, docNumber: true } },
           approver: { select: { id: true, fullName: true } },
         },
       });
