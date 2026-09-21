@@ -18,12 +18,18 @@ import kpiRoutes from './routes/kpiRoutes';
 
 const app = express();
 
+// Reverse proxy (Railway, Vercel, Cloudflare) orqasida to'g'ri IP olish uchun
+app.set('trust proxy', 1);
+
 // ── Security Middleware ──────────────────────────
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 
 app.use(
   cors({
-    origin: config.allowedOrigins,
+    origin: (origin, callback) => {
+      // Kelayotgan barcha so'rovlar (Vercel, localhost, mobil, curl) uchun ruxsat berish
+      callback(null, true);
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
@@ -33,14 +39,14 @@ app.use(
 // ── Rate Limiting ────────────────────────────────
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 daqiqa
-  max: process.env.NODE_ENV === 'development' ? 5000 : 500,
+  max: process.env.NODE_ENV === 'development' ? 5000 : 1000,
   message: { success: false, message: 'Juda ko\'p so\'rov. Keyinroq urinib ko\'ring.' },
   skip: () => process.env.NODE_ENV === 'development',
 });
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: process.env.NODE_ENV === 'development' ? 1000 : 10,
+  max: 100,
   message: { success: false, message: 'Juda ko\'p kirish urinishi.' },
   skip: () => process.env.NODE_ENV === 'development',
 });

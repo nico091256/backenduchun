@@ -11,7 +11,9 @@ const httpServer = createServer(app);
 // ── Socket.io Setup ──────────────────────────────
 export const io = new Server(httpServer, {
   cors: {
-    origin: config.allowedOrigins,
+    origin: (origin, callback) => {
+      callback(null, true);
+    },
     methods: ['GET', 'POST'],
     credentials: true,
   },
