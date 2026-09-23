@@ -30,30 +30,54 @@ class EmailService {
    * General email sending function
    */
   async sendEmail(options: { to: string; subject: string; html: string; text?: string }) {
-    if (!this.transporter) {
-      this.initTransporter();
-    }
+    const { smtpUser, smtpPass } = config.email;
 
-    if (!this.transporter) {
-      console.warn(`[EmailService] Skipping email to ${options.to}. Transporter not configured.`);
+    if (!smtpUser || !smtpPass) {
+      console.warn(`⚠️ [EmailService] Skipping email to ${options.to}. SMTP credentials not configured.`);
       return false;
     }
 
-    try {
-      const info = await this.transporter.sendMail({
-        from: `"BPM Tizimi" <${config.email.smtpUser}>`,
-        to: options.to,
-        subject: options.subject,
-        html: options.html,
-        text: options.text || options.subject,
-      });
-      console.log(`✉️ [EmailService] Email sent successfully to ${options.to}: ${info.messageId}`);
-      return true;
-    } catch (error) {
-      console.error(`❌ [EmailService] Failed to send email to ${options.to}:`, error);
-      return false;
+    const configsToTry = [
+      { host: config.email.smtpHost || 'smtp.yandex.ru', port: config.email.smtpPort || 465, secure: true },
+      { host: 'smtp.yandex.ru', port: 587, secure: false },
+      { host: 'smtp.gmail.com', port: 465, secure: true },
+      { host: 'smtp.mail.ru', port: 465, secure: true },
+    ];
+
+    for (const cfg of configsToTry) {
+      try {
+        const transporter = nodemailer.createTransport({
+          host: cfg.host,
+          port: cfg.port,
+          secure: cfg.secure,
+          auth: {
+            user: smtpUser,
+            pass: smtpPass,
+          },
+          tls: {
+            rejectUnauthorized: false,
+          },
+        });
+
+        const info = await transporter.sendMail({
+          from: `"BPM Tizimi" <${smtpUser}>`,
+          to: options.to,
+          subject: options.subject,
+          html: options.html,
+          text: options.text || options.subject,
+        });
+
+        console.log(`✉️ [EmailService] Email sent successfully via ${cfg.host}:${cfg.port} to ${options.to}: ${info.messageId}`);
+        return true;
+      } catch (err: any) {
+        console.warn(`⚠️ [EmailService] Failed attempt via ${cfg.host}:${cfg.port}:`, err?.message || err);
+      }
     }
+
+    console.error(`❌ [EmailService] All SMTP fallback attempts failed for ${options.to}. Check App Password / SMTP settings.`);
+    return false;
   }
+
 
   /**
    * Notification email sent to an assigned executor for incoming email document
