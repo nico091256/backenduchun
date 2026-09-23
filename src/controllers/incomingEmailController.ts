@@ -98,7 +98,10 @@ export class IncomingEmailController {
         return;
       }
 
-      const deadlineDate = overallDeadline ? new Date(overallDeadline) : null;
+      const deadlineDate = overallDeadline && typeof overallDeadline === 'string' && overallDeadline.trim()
+        ? new Date(overallDeadline)
+        : null;
+      const validDeadline = deadlineDate && !isNaN(deadlineDate.getTime()) ? deadlineDate : null;
 
       // Update Document
       const updatedDoc = await prisma.document.update({
@@ -107,7 +110,7 @@ export class IncomingEmailController {
           executorId: executorUser.id,
           status: 'IN_EXECUTION',
           resolution: resolution || existingDoc.resolution,
-          overallDeadline: deadlineDate || existingDoc.overallDeadline,
+          overallDeadline: validDeadline || existingDoc.overallDeadline,
           priority: priority || existingDoc.priority,
           history: {
             create: {
@@ -125,47 +128,59 @@ export class IncomingEmailController {
       });
 
       // 1. Create In-App Notification
-      await prisma.notification.create({
-        data: {
-          userId: executorUser.id,
-          type: 'TASK_ASSIGNED',
-          title: '📥 Yangi Kiruvchi Topshiriq',
-          message: `Sizga "${updatedDoc.title}" (#${updatedDoc.docNumber}) hujjati ijroga biriktirildi.`,
-          link: `/dashboard/documents/${updatedDoc.id}`,
-          documentId: updatedDoc.id,
-        },
-      });
+      try {
+        await prisma.notification.create({
+          data: {
+            userId: executorUser.id,
+            type: 'TASK_ASSIGNED',
+            title: '📥 Yangi Kiruvchi Topshiriq',
+            message: `Sizga "${updatedDoc.title}" (#${updatedDoc.docNumber}) hujjati ijroga biriktirildi.`,
+            link: `/dashboard/documents/${updatedDoc.id}`,
+            documentId: updatedDoc.id,
+          },
+        });
+      } catch (notifErr) {
+        console.error('Failed to create in-app notification:', notifErr);
+      }
 
       // 2. Telegram Notification
-      await telegramService.sendExecutionAssigned(executorUser.id, {
-        id: updatedDoc.id,
-        title: updatedDoc.title,
-        docNumber: updatedDoc.docNumber,
-        creatorName: req.user?.email || 'Administrator',
-        deadline: updatedDoc.overallDeadline,
-      });
-
+      try {
+        await telegramService.sendExecutionAssigned(executorUser.id, {
+          id: updatedDoc.id,
+          title: updatedDoc.title,
+          docNumber: updatedDoc.docNumber,
+          creatorName: req.user?.email || 'Administrator',
+          deadline: updatedDoc.overallDeadline,
+        });
+      } catch (tgErr) {
+        console.error('Failed to send Telegram notification:', tgErr);
+      }
 
       // 3. Email Notification
       if (executorUser.email) {
-        await emailService.sendTaskAssignedEmail({
-          toEmail: executorUser.email,
-          executorName: executorUser.fullName,
-          docNumber: updatedDoc.docNumber,
-          docTitle: updatedDoc.title,
-          deadline: updatedDoc.overallDeadline
-            ? new Date(updatedDoc.overallDeadline).toLocaleDateString('uz-UZ')
-            : undefined,
-          resolution: resolution || undefined,
-          docId: updatedDoc.id,
-        });
+        try {
+          await emailService.sendTaskAssignedEmail({
+            toEmail: executorUser.email,
+            executorName: executorUser.fullName,
+            docNumber: updatedDoc.docNumber,
+            docTitle: updatedDoc.title,
+            deadline: updatedDoc.overallDeadline
+              ? new Date(updatedDoc.overallDeadline).toLocaleDateString('uz-UZ')
+              : undefined,
+            resolution: resolution || undefined,
+            docId: updatedDoc.id,
+          });
+        } catch (mailErr) {
+          console.error('Failed to send Email notification:', mailErr);
+        }
       }
 
       sendSuccess(res, updatedDoc, "Kiruvchi xat ijroga muvaffaqiyatli yo'naltirildi");
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error assigning incoming email:', error);
-      sendError(res, "Kiruvchi xatni ijroga yo'naltirishda xatolik yuz berdi");
+      sendError(res, error?.message || "Kiruvchi xatni ijroga yo'naltirishda xatolik yuz berdi", 500);
     }
+
   }
 
   /**
