@@ -1,11 +1,14 @@
 import { Router } from 'express';
 import { authenticate } from '../middleware/auth';
+import { requireRole } from '../middleware/roleGuard';
 import { incomingEmailController } from '../controllers/incomingEmailController';
 
 const router = Router();
 
-// All incoming email routes require authentication
+// All incoming email routes require authentication and ADMIN or SECRETARY role
 router.use(authenticate);
+router.use(requireRole('ADMIN', 'SECRETARY'));
+
 
 // GET /api/incoming-emails - Get all incoming emails
 router.get('/', (req, res) => incomingEmailController.getIncomingEmails(req, res));
