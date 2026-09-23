@@ -60,7 +60,17 @@ class IncomingEmailService {
 
     const accounts: EmailAccountConfig[] = [];
 
-    if (config.email.gmail.user && config.email.gmail.pass) {
+    if (config.email.official.user && config.email.official.pass) {
+      accounts.push({
+        name: 'Discover Invest (info@di.uz)',
+        host: config.email.official.host,
+        port: config.email.official.port,
+        user: config.email.official.user,
+        pass: config.email.official.pass,
+      });
+    }
+
+    if (config.email.gmail.user && config.email.gmail.pass && config.email.gmail.user !== config.email.official.user) {
       accounts.push({
         name: 'Gmail',
         host: config.email.gmail.host,
@@ -70,7 +80,7 @@ class IncomingEmailService {
       });
     }
 
-    if (config.email.yandex.user && config.email.yandex.pass) {
+    if (config.email.yandex.user && config.email.yandex.pass && config.email.yandex.user !== config.email.official.user) {
       accounts.push({
         name: 'Yandex',
         host: config.email.yandex.host,
@@ -84,6 +94,7 @@ class IncomingEmailService {
       this.isProcessing = false;
       return;
     }
+
 
     for (const acc of accounts) {
       try {
@@ -100,19 +111,44 @@ class IncomingEmailService {
    * Fetch unread emails via IMAP Flow
    */
   private async fetchUnreadEmails(acc: EmailAccountConfig) {
-    const client = new ImapFlow({
-      host: acc.host,
-      port: acc.port,
-      secure: true,
-      auth: {
-        user: acc.user,
-        pass: acc.pass,
-      },
-      logger: false,
-    });
+    const candidateHosts = [acc.host];
+    if (acc.user.includes('di.uz') || acc.user.includes('@')) {
+      ['imap.yandex.ru', 'mail.di.uz', 'imap.di.uz', 'imap.mail.ru', 'imap.gmail.com'].forEach(h => {
+        if (!candidateHosts.includes(h)) candidateHosts.push(h);
+      });
+    }
+
+    let client: ImapFlow | null = null;
+    let connectedHost = '';
+
+    for (const host of candidateHosts) {
+      try {
+        const testClient = new ImapFlow({
+          host,
+          port: acc.port,
+          secure: true,
+          auth: {
+            user: acc.user,
+            pass: acc.pass,
+          },
+          logger: false,
+        });
+
+        await testClient.connect();
+        client = testClient;
+        connectedHost = host;
+        break;
+      } catch {
+        // Try next host
+      }
+    }
+
+    if (!client) {
+      console.warn(`⚠️ [IncomingEmailService] Could not connect to IMAP server for ${acc.user} (tried ${candidateHosts.join(', ')})`);
+      return;
+    }
 
     try {
-      await client.connect();
       const lock = await client.getMailboxLock('INBOX');
 
       try {
@@ -122,7 +158,8 @@ class IncomingEmailService {
           return;
         }
 
-        console.log(`📬 [IncomingEmailService] Found ${unseenUids.length} unread email(s) in ${acc.name} (${acc.user})`);
+        console.log(`📬 [IncomingEmailService] Connected via ${connectedHost}. Found ${unseenUids.length} unread email(s) in ${acc.name} (${acc.user})`);
+
 
         // Get or determine system admin user to attach as creator
         const adminUser = await this.getSystemAdminUser();

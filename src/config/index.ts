@@ -43,7 +43,14 @@ export const config = {
       host: process.env.YANDEX_IMAP_HOST || 'imap.yandex.ru',
       port: parseInt(process.env.YANDEX_IMAP_PORT || '993', 10),
     },
+    official: {
+      user: process.env.OFFICIAL_EMAIL_USER || 'info@di.uz',
+      pass: process.env.OFFICIAL_EMAIL_PASS || 'Akfa12062021',
+      host: process.env.OFFICIAL_EMAIL_HOST || 'imap.yandex.ru',
+      port: parseInt(process.env.OFFICIAL_EMAIL_PORT || '993', 10),
+    },
     checkCron: process.env.EMAIL_CHECK_CRON || '*/2 * * * *',
   }
 };
+
 
