@@ -27,7 +27,11 @@ export const getAuditLog = async (req: AuthRequest, res: Response): Promise<void
     }
 
     if (actionName) {
-      where.actionName = actionName as string;
+      if (actionName !== 'ALL') {
+        where.actionName = actionName as string;
+      }
+    } else {
+      where.actionName = { in: ['EXECUTOR_VIEWED', 'FILE_VIEWED'] };
     }
 
     if (dateFrom || dateTo) {

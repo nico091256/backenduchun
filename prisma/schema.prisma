@@ -36,6 +36,7 @@ model User {
   taskHistories       TaskHistory[]  @relation("HistoryActor")
   notifications       Notification[] @relation("UserNotifications")
   refreshTokens       RefreshToken[]
+  createdTemplates    DocumentTemplate[] @relation("TemplateCreator")
 
   @@map("users")
 }
@@ -70,6 +71,7 @@ model Document {
   updatedAt        DateTime         @updatedAt
   submittedAt      DateTime?        // Tasdiqlashga yuborilgan vaqt
   completedAt      DateTime?        // Yakunlangan vaqt
+  executorViewedAt DateTime?        // Ijrochi hujjatni ochib ko'rgan vaqt
 
   // Foreign Keys
   creatorId        Int
@@ -217,4 +219,25 @@ model RefreshToken {
   createdAt DateTime @default(now())
 
   @@map("refresh_tokens")
+}
+
+// ─────────────────────────────────────────────
+// HUJJAT SHABLONLARI (DOCUMENT TEMPLATES)
+// ─────────────────────────────────────────────
+model DocumentTemplate {
+  id              Int      @id @default(autoincrement())
+  title           String   // Shablon nomi (masalan: Mehnat ta'tili arizasi)
+  category        String   // ARIZA, BUYRUQ, BILDIRISHNOMA, XIZMAT_XATI va h.k.
+  docType         String   @default("INTERNAL") // INCOMING | OUTGOING | INTERNAL
+  content         String   // Shablon matni va {XODIM_ISMI} teglar
+  defaultPriority String   @default("NORMAL") // LOW | NORMAL | HIGH | URGENT
+  description     String?  // Shablon haqida qisqacha ma'lumot
+
+  createdById     Int?
+  createdBy       User?    @relation("TemplateCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("document_templates")
 }

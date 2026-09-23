@@ -15,6 +15,7 @@ import userRoutes from './routes/userRoutes';
 import notificationRoutes from './routes/notificationRoutes';
 import adminRoutes from './routes/adminRoutes';
 import kpiRoutes from './routes/kpiRoutes';
+import templateRoutes from './routes/templateRoutes';
 
 const app = express();
 
@@ -83,6 +84,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/kpi', kpiRoutes);
+app.use('/api/templates', templateRoutes);
 
 // ── Error Handlers ───────────────────────────────
 app.use(notFoundHandler);

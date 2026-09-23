@@ -55,7 +55,18 @@ async function calcKpiForUser(userId: number) {
   const creatorRate = createdDocs > 0 ? Math.round(((createdDocs - rejectedDocsAsCreator) / createdDocs) * 100) : 100;
   const approverRate = totalApprovals > 0 ? Math.round((onTimeApprovals / totalApprovals) * 100) : 100;
   const executorRate = totalExecutions > 0 ? Math.round((onTimeExecutions / totalExecutions) * 100) : 100;
-  const overallRate = Math.round((creatorRate + approverRate + executorRate) / 3);
+  
+  const hasApprover = totalApprovals > 0;
+  const hasExecutor = totalExecutions > 0;
+  let overallRate = 100;
+
+  if (hasApprover && hasExecutor) {
+    overallRate = Math.round((approverRate + executorRate) / 2);
+  } else if (hasApprover) {
+    overallRate = approverRate;
+  } else if (hasExecutor) {
+    overallRate = executorRate;
+  }
 
   return {
     creator: {

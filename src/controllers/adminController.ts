@@ -30,16 +30,25 @@ export const updateDocumentDeadline = async (req: AuthRequest, res: Response): P
     const isFuture = newDate > new Date();
     const shouldReactivate = document.status === 'EXPIRED' && isFuture;
 
+    let reactivateStatus = 'IN_APPROVAL';
+    if (shouldReactivate) {
+      const hasNoApprovers = !document.approvalSteps || document.approvalSteps.length === 0;
+      const allApproved = document.approvalSteps && document.approvalSteps.length > 0 && document.approvalSteps.every(s => s.stepStatus === 'APPROVED' || s.stepStatus === 'SKIPPED');
+      if (hasNoApprovers || allApproved) {
+        reactivateStatus = 'IN_EXECUTION';
+      }
+    }
+
     const updated = await prisma.document.update({
       where: { id: docId },
       data: {
         overallDeadline: newDate,
-        ...(shouldReactivate ? { status: 'IN_APPROVAL' } : {}),
+        ...(shouldReactivate ? { status: reactivateStatus } : {}),
       },
     });
 
-    // Hujjat qayta faollashtirilsa, EXPIRED qadamlarni ham PENDING qilamiz
-    if (shouldReactivate) {
+    // Hujjat qayta faollashtirilsa va tasdiqlash bosqichlari bo'lsa, EXPIRED qadamlarni PENDING qilamiz
+    if (shouldReactivate && reactivateStatus === 'IN_APPROVAL') {
       await prisma.approvalStep.updateMany({
         where: {
           documentId: docId,
@@ -56,7 +65,7 @@ export const updateDocumentDeadline = async (req: AuthRequest, res: Response): P
       data: {
         documentId: docId,
         actionName: 'DEADLINE_EXTENDED',
-        description: `Umumiy muddat ${newDate.toLocaleDateString('uz-UZ')} gacha uzaytirildi${shouldReactivate ? " va hujjat qayta faollashtirildi" : ""}`,
+        description: `Umumiy muddat ${newDate.toLocaleDateString('uz-UZ')} gacha uzaytirildi${shouldReactivate ? ` va hujjat ${reactivateStatus === 'IN_EXECUTION' ? "ijro" : "tasdiqlash"} holatiga qaytarildi` : ""}`,
         performedById: req.user!.userId,
       },
     });
@@ -101,18 +110,25 @@ export const updateStepDeadline = async (req: AuthRequest, res: Response): Promi
       },
     });
 
-    // MUHIM: Hujjatning umumiy muddati ushbu qadam muddatidan kichik bo'lsa yoki hujjat EXPIRED bo'lsa,
-    // umumiy muddatni ham yangilaymiz va hujjatni IN_APPROVAL holatiga qaytaramiz!
     const doc = step.document;
     const needDocDeadlineUpdate = !doc.overallDeadline || doc.overallDeadline < newDate;
     const needDocReactivate = doc.status === 'EXPIRED' && isFuture;
 
     if (needDocDeadlineUpdate || needDocReactivate) {
+      let reactivateStatus = 'IN_APPROVAL';
+      if (needDocReactivate) {
+        const allSteps = await prisma.approvalStep.findMany({ where: { documentId: doc.id } });
+        const allApproved = allSteps.length > 0 && allSteps.every(s => s.id === sId ? isFuture : (s.stepStatus === 'APPROVED' || s.stepStatus === 'SKIPPED'));
+        if (allSteps.length === 0 || allApproved) {
+          reactivateStatus = 'IN_EXECUTION';
+        }
+      }
+
       await prisma.document.update({
         where: { id: doc.id },
         data: {
           ...(needDocDeadlineUpdate ? { overallDeadline: newDate } : {}),
-          ...(needDocReactivate ? { status: 'IN_APPROVAL' } : {}),
+          ...(needDocReactivate ? { status: reactivateStatus } : {}),
         },
       });
     }

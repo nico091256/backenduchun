@@ -154,9 +154,37 @@ export const getDocumentById = async (req: AuthRequest, res: Response): Promise<
     const isExecutor = document.executorId === userId;
     const isApprover = document.approvalSteps.some((step) => step.approverId === userId);
 
-    if (!isAdmin && !isCreator && !isExecutor && !isApprover) {
-      sendError(res, 'Ushbu hujjatni ko\'rish uchun sizda ruxsat yo\'q', 403);
-      return;
+    // Agar mas'ul ijrochi hujjatni birinchi marta ochib ko'rayotgan bo'lsa, ko'rilgan vaqtni yozib qo'yamiz
+    if (isExecutor && !(document as any).executorViewedAt) {
+      const now = new Date();
+      await prisma.document.update({
+        where: { id: document.id },
+        data: { executorViewedAt: now } as any,
+      });
+      await prisma.taskHistory.create({
+        data: {
+          actionName: 'EXECUTOR_VIEWED',
+          description: 'Mas\'ul ijrochi hujjatni ochib ko\'rdi va tanishdi 👁️',
+          performedById: userId,
+          documentId: document.id,
+        },
+      });
+
+      // Tashabbuskorga / Boshliqqa bildirishnoma yuborish
+      if (document.creatorId && document.creatorId !== userId) {
+        await prisma.notification.create({
+          data: {
+            userId: document.creatorId,
+            documentId: document.id,
+            type: 'EXECUTOR_VIEWED',
+            title: `👁️ Mas'ul ijrochi hujjatni ko'rdi`,
+            message: `Mas'ul ijrochi "${document.title}" hujjatini ochib ko'rdi va tanishdi.`,
+            link: `/dashboard/documents/${document.id}`,
+          },
+        });
+      }
+
+      (document as any).executorViewedAt = now;
     }
 
     sendSuccess(res, document, 'Hujjat tafsilotlari');
@@ -718,43 +746,66 @@ export const resubmitDocument = async (req: AuthRequest, res: Response): Promise
       return;
     }
 
-    // Barcha bosqichlarni PENDING ga qaytarish
-    await prisma.approvalStep.updateMany({
-      where: { documentId: docId },
-      data: { stepStatus: 'PENDING', comment: null, actionDate: null },
-    });
+    const hasNoApprovers = !document.approvalSteps || document.approvalSteps.length === 0;
+    const targetStatus = hasNoApprovers ? 'IN_EXECUTION' : 'IN_APPROVAL';
+
+    // Barcha bosqichlarni PENDING ga qaytarish (agar bosqichlar bo'lsa)
+    if (!hasNoApprovers) {
+      await prisma.approvalStep.updateMany({
+        where: { documentId: docId },
+        data: { stepStatus: 'PENDING', comment: null, actionDate: null },
+      });
+    }
 
     const updatedDoc = await prisma.document.update({
       where: { id: docId },
       data: {
-        status: 'IN_APPROVAL',
+        status: targetStatus,
         submittedAt: new Date(),
         history: {
           create: {
-            actionName: 'RESUBMITTED',
-            description: 'Hujjat rad etilgandan so\'ng qayta tasdiqlashga yuborildi',
+            actionName: hasNoApprovers ? 'DIRECT_EXECUTION' : 'RESUBMITTED',
+            description: hasNoApprovers
+              ? 'Hujjat qayta topshirildi va to\'g\'ridan-to\'g\'ri ijroga yo\'naltirildi'
+              : 'Hujjat rad etilgandan so\'ng qayta tasdiqlashga yuborildi',
             performedById: req.user!.userId,
           },
         },
       },
     });
 
-    // Birinchi tasdiqlovchiga bildirishnoma
-    const firstStep = document.approvalSteps.find((s) => s.stepOrder === 1);
-    if (firstStep) {
-      await prisma.notification.create({
-        data: {
-          userId: firstStep.approverId,
-          documentId: docId,
-          type: 'APPROVAL_REQUEST',
-          title: 'Qayta tasdiqlash so\'rovi',
-          message: `"${document.title}" hujjati qayta tasdiqlashga yuborildi.`,
-          link: `/dashboard/documents/${docId}`,
-        },
-      });
+    if (hasNoApprovers) {
+      // Mas'ul ijrochiga bildirishnoma
+      if (document.executorId && document.executorId !== req.user!.userId) {
+        await prisma.notification.create({
+          data: {
+            userId: document.executorId,
+            documentId: docId,
+            type: 'APPROVAL_REQUEST',
+            title: 'Yangi topshiriq ijroga kelib tushdi! 🚀',
+            message: `"${document.title}" hujjati qayta topshirildi va to'g'ridan-to'g'ri ijro etishingiz uchun yo'naltirildi.`,
+            link: `/dashboard/documents/${docId}`,
+          },
+        });
+      }
+    } else {
+      // Birinchi tasdiqlovchiga bildirishnoma
+      const firstStep = document.approvalSteps.find((s) => s.stepOrder === 1);
+      if (firstStep) {
+        await prisma.notification.create({
+          data: {
+            userId: firstStep.approverId,
+            documentId: docId,
+            type: 'APPROVAL_REQUEST',
+            title: 'Qayta tasdiqlash so\'rovi',
+            message: `"${document.title}" hujjati qayta tasdiqlashga yuborildi.`,
+            link: `/dashboard/documents/${docId}`,
+          },
+        });
+      }
     }
 
-    sendSuccess(res, updatedDoc, 'Hujjat qayta tasdiqlashga yuborildi');
+    sendSuccess(res, updatedDoc, hasNoApprovers ? 'Hujjat qayta topshirildi va ijroga yo\'naltirildi' : 'Hujjat qayta tasdiqlashga yuborildi');
   } catch (err) {
     console.error(err);
     sendError(res, 'Server xatosi', 500);

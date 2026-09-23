@@ -294,3 +294,48 @@ export const rejectStep = async (req: AuthRequest, res: Response): Promise<void>
     sendError(res, 'Server xatosi', 500);
   }
 };
+
+// POST /api/approvals/bulk-approve — Ommaviy tasdiqlash
+export const bulkApproveSteps = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { stepIds, comment } = req.body;
+
+    if (!Array.isArray(stepIds) || stepIds.length === 0) {
+      sendError(res, 'Tasdiqlanishi kerak bo\'lgan bosqichlar (stepIds) ko\'rsatilmadi', 400);
+      return;
+    }
+
+    const userId = req.user!.userId;
+    const isAdmin = req.user!.role === 'ADMIN';
+
+    const validSteps = await prisma.approvalStep.findMany({
+      where: {
+        id: { in: stepIds.map((id: any) => parseInt(id)) },
+        stepStatus: 'PENDING',
+        ...(isAdmin ? {} : { approverId: userId }),
+      },
+    });
+
+    if (validSteps.length === 0) {
+      sendError(res, 'Tasdiqlanadigan mos keluvchi bosqichlar topilmadi', 404);
+      return;
+    }
+
+    const defaultComment = comment || 'Ommaviy tasdiqlandi';
+    const results = [];
+
+    for (const step of validSteps) {
+      try {
+        const res = await workflowService.approveStep(step.id, step.documentId, defaultComment, userId);
+        results.push(res);
+      } catch (e) {
+        console.error(`Bulk approve error for step ${step.id}:`, e);
+      }
+    }
+
+    sendSuccess(res, { count: results.length, totalRequested: stepIds.length }, `${results.length} ta hujjat bosqichi muvaffaqiyatli tasdiqlandi`);
+  } catch (err) {
+    console.error(err);
+    sendError(res, 'Server xatosi', 500);
+  }
+};
