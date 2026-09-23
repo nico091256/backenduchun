@@ -4,8 +4,8 @@ import { Server } from 'socket.io';
 import app from './app';
 import { config } from './config';
 import { prisma } from './utils/prisma';
-import { execSync } from 'child_process';
 import { deadlineService } from './services/deadlineService';
+
 import { incomingEmailService } from './services/incomingEmailService';
 
 const httpServer = createServer(app);
@@ -46,17 +46,9 @@ export const sendSocketNotification = (userId: number, notification: object) => 
 // ── Server Start ─────────────────────────────────
 const startServer = async () => {
   try {
-    // Railway / Production PostgreSQL ma'lumotlar bazasi ustunlarini avtomatik sinxronlash
-    try {
-      console.log('🔄 DB sxemasini avtomatik sinxronlash (prisma db push)...');
-      execSync('npx prisma db push --accept-data-loss', { stdio: 'inherit' });
-      console.log('✅ DB sxemasi muvaffaqiyatli sinxronlandi');
-    } catch (dbSyncErr) {
-      console.warn('⚠️ DB sxemasini sinxronlashda ogohlantirish:', dbSyncErr);
-    }
-
     // DB ulanishini tekshirish
     await prisma.$connect();
+
 
     console.log('✅ PostgreSQL ulandi');
 
