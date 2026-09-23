@@ -16,8 +16,10 @@ import notificationRoutes from './routes/notificationRoutes';
 import adminRoutes from './routes/adminRoutes';
 import kpiRoutes from './routes/kpiRoutes';
 import templateRoutes from './routes/templateRoutes';
+import incomingEmailRoutes from './routes/incomingEmailRoutes';
 
 const app = express();
+
 
 // Reverse proxy (Railway, Vercel, Cloudflare) orqasida to'g'ri IP olish uchun
 app.set('trust proxy', 1);
@@ -85,6 +87,8 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/kpi', kpiRoutes);
 app.use('/api/templates', templateRoutes);
+app.use('/api/incoming-emails', incomingEmailRoutes);
+
 
 // ── Error Handlers ───────────────────────────────
 app.use(notFoundHandler);

@@ -23,4 +23,27 @@ export const config = {
 
   // Telegram Bot
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
+
+  // Email Notification & IMAP Settings
+  email: {
+    smtpHost: process.env.SMTP_HOST || 'smtp.gmail.com',
+    smtpPort: parseInt(process.env.SMTP_PORT || '465', 10),
+    smtpSecure: process.env.SMTP_SECURE !== 'false',
+    smtpUser: process.env.SMTP_USER || process.env.GMAIL_USER || '',
+    smtpPass: process.env.SMTP_PASS || process.env.GMAIL_APP_PASSWORD || '',
+    gmail: {
+      user: process.env.GMAIL_USER || '',
+      pass: process.env.GMAIL_APP_PASSWORD || '',
+      host: process.env.GMAIL_IMAP_HOST || 'imap.gmail.com',
+      port: parseInt(process.env.GMAIL_IMAP_PORT || '993', 10),
+    },
+    yandex: {
+      user: process.env.YANDEX_USER || '',
+      pass: process.env.YANDEX_APP_PASSWORD || '',
+      host: process.env.YANDEX_IMAP_HOST || 'imap.yandex.ru',
+      port: parseInt(process.env.YANDEX_IMAP_PORT || '993', 10),
+    },
+    checkCron: process.env.EMAIL_CHECK_CRON || '*/2 * * * *',
+  }
 };
+

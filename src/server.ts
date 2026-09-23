@@ -5,8 +5,10 @@ import app from './app';
 import { config } from './config';
 import { prisma } from './utils/prisma';
 import { deadlineService } from './services/deadlineService';
+import { incomingEmailService } from './services/incomingEmailService';
 
 const httpServer = createServer(app);
+
 
 // ── Socket.io Setup ──────────────────────────────
 export const io = new Server(httpServer, {
@@ -48,6 +50,10 @@ const startServer = async () => {
 
     // Deadline monitoring boshlash
     deadlineService.start();
+
+    // Kiruvchi email xatlarini kuzatish (IMAP Cron)
+    incomingEmailService.startCronJob();
+
 
     httpServer.listen(config.port, () => {
       console.log(`\n🚀 BPM Backend Server ishlamoqda:`);

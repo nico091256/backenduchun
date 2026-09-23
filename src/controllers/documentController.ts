@@ -18,6 +18,13 @@ const decodeFilename = (name?: string): string => {
   }
 };
 
+const parseSafeDate = (val?: any): Date | undefined => {
+  if (!val || typeof val !== 'string' || !val.trim()) return undefined;
+  const d = new Date(val);
+  return isNaN(d.getTime()) ? undefined : d;
+};
+
+
 // GET /api/documents
 export const getDocuments = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
@@ -274,7 +281,14 @@ export const createDocument = async (req: AuthRequest, res: Response): Promise<v
           },
         },
       });
-      docNumber = `${prefix}-${currentYear}-${String(count + 1).padStart(4, '0')}`;
+      
+      let counter = count + 1;
+      let generatedNumber = `${prefix}-${currentYear}-${String(counter).padStart(4, '0')}`;
+      while (await prisma.document.findUnique({ where: { docNumber: generatedNumber } })) {
+        counter++;
+        generatedNumber = `${prefix}-${currentYear}-${String(counter).padStart(4, '0')}`;
+      }
+      docNumber = generatedNumber;
     }
 
     // Fayllarni ajratish (duplikat bo'lmasligi uchun ustuvorlik tekshiriladi)
@@ -314,14 +328,14 @@ export const createDocument = async (req: AuthRequest, res: Response): Promise<v
         docType: normalizedDocType,
         senderOrg: senderOrg || null,
         senderDocNumber: senderDocNumber || null,
-        senderDate: senderDate ? new Date(senderDate) : null,
+        senderDate: parseSafeDate(senderDate) || null,
         resolution: resolution || null,
         recipientOrg: recipientOrg || null,
         deliveryMethod: deliveryMethod || null,
-        parentDocId: parentDocId ? parseInt(parentDocId) : null,
-        overallDeadline: overallDeadline ? new Date(overallDeadline) : undefined,
+        parentDocId: parentDocId && !isNaN(parseInt(parentDocId, 10)) ? parseInt(parentDocId, 10) : null,
+        overallDeadline: parseSafeDate(overallDeadline),
         creatorId: req.user!.userId,
-        executorId: executorId ? parseInt(executorId) : null,
+        executorId: executorId && !isNaN(parseInt(executorId, 10)) ? parseInt(executorId, 10) : null,
         ...fileData,
         // Bir nechta fayllarni DocumentAttachment jadvaliga saqlash
         attachments: uploadedFiles.length > 0 ? {
@@ -337,7 +351,7 @@ export const createDocument = async (req: AuthRequest, res: Response): Promise<v
           create: parsedApprovers.map((ap, index) => ({
             stepOrder: index + 1,
             approverId: ap.approverId,
-            stepDeadline: ap.stepDeadline ? new Date(ap.stepDeadline) : undefined,
+            stepDeadline: parseSafeDate(ap.stepDeadline),
           })),
         },
         history: {
@@ -360,10 +374,11 @@ export const createDocument = async (req: AuthRequest, res: Response): Promise<v
     });
 
     sendCreated(res, document, 'Hujjat muvaffaqiyatli yaratildi');
-  } catch (err) {
-    console.error(err);
-    sendError(res, 'Hujjat yaratishda xatolik', 500);
+  } catch (err: any) {
+    console.error('❌ Error creating document:', err);
+    sendError(res, err?.message || 'Hujjat yaratishda xatolik yuz berdi', 500);
   }
+
 };
 
 // PATCH /api/documents/:id/submit
