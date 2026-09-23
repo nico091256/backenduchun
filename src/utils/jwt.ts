@@ -28,11 +28,16 @@ export const verifyRefreshToken = (token: string): JwtPayload => {
 };
 
 export const getTokenExpiry = (expiresIn: string): Date => {
-  const ms =
-    expiresIn.endsWith('d')
-      ? parseInt(expiresIn) * 24 * 60 * 60 * 1000
-      : expiresIn.endsWith('m')
-      ? parseInt(expiresIn) * 60 * 1000
-      : 7 * 24 * 60 * 60 * 1000;
+  let ms = 7 * 24 * 60 * 60 * 1000;
+  if (expiresIn.endsWith('d')) {
+    ms = parseInt(expiresIn, 10) * 24 * 60 * 60 * 1000;
+  } else if (expiresIn.endsWith('h')) {
+    ms = parseInt(expiresIn, 10) * 60 * 60 * 1000;
+  } else if (expiresIn.endsWith('m')) {
+    ms = parseInt(expiresIn, 10) * 60 * 1000;
+  } else if (expiresIn.endsWith('s')) {
+    ms = parseInt(expiresIn, 10) * 1000;
+  }
   return new Date(Date.now() + ms);
 };
+
