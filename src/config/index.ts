@@ -26,11 +26,12 @@ export const config = {
 
   // Email Notification & IMAP Settings
   email: {
-    smtpHost: process.env.SMTP_HOST || 'smtp.gmail.com',
+    smtpHost: process.env.SMTP_HOST || 'smtp.yandex.ru',
     smtpPort: parseInt(process.env.SMTP_PORT || '465', 10),
     smtpSecure: process.env.SMTP_SECURE !== 'false',
-    smtpUser: process.env.SMTP_USER || process.env.GMAIL_USER || '',
-    smtpPass: process.env.SMTP_PASS || process.env.GMAIL_APP_PASSWORD || '',
+    smtpUser: process.env.SMTP_USER || process.env.GMAIL_USER || process.env.OFFICIAL_EMAIL_USER || 'info@di.uz',
+    smtpPass: process.env.SMTP_PASS || process.env.GMAIL_APP_PASSWORD || process.env.OFFICIAL_EMAIL_PASS || 'Akfa12062021',
+
     gmail: {
       user: process.env.GMAIL_USER || '',
       pass: process.env.GMAIL_APP_PASSWORD || '',
