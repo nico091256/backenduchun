@@ -24,11 +24,11 @@ export const config = {
   // Telegram Bot
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
 
-  // Email Notification & IMAP Settings
+  // Email Notification & IMAP Settings (Microsoft Office 365 / Outlook for Discover Invest)
   email: {
-    smtpHost: process.env.SMTP_HOST || 'smtp.yandex.ru',
-    smtpPort: parseInt(process.env.SMTP_PORT || '465', 10),
-    smtpSecure: process.env.SMTP_SECURE !== 'false',
+    smtpHost: process.env.SMTP_HOST || 'smtp.office365.com',
+    smtpPort: parseInt(process.env.SMTP_PORT || '587', 10),
+    smtpSecure: process.env.SMTP_SECURE === 'true',
     smtpUser: process.env.SMTP_USER || process.env.GMAIL_USER || process.env.OFFICIAL_EMAIL_USER || 'info@di.uz',
     smtpPass: process.env.SMTP_PASS || process.env.GMAIL_APP_PASSWORD || process.env.OFFICIAL_EMAIL_PASS || 'Akfa12062021',
 
@@ -47,11 +47,12 @@ export const config = {
     official: {
       user: process.env.OFFICIAL_EMAIL_USER || 'info@di.uz',
       pass: process.env.OFFICIAL_EMAIL_PASS || 'Akfa12062021',
-      host: process.env.OFFICIAL_EMAIL_HOST || 'imap.yandex.ru',
+      host: process.env.OFFICIAL_EMAIL_HOST || 'outlook.office365.com',
       port: parseInt(process.env.OFFICIAL_EMAIL_PORT || '993', 10),
     },
     checkCron: process.env.EMAIL_CHECK_CRON || '*/2 * * * *',
   }
 };
+
 
 

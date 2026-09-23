@@ -38,11 +38,14 @@ class EmailService {
     }
 
     const configsToTry = [
-      { host: config.email.smtpHost || 'smtp.yandex.ru', port: config.email.smtpPort || 465, secure: true },
-      { host: 'smtp.yandex.ru', port: 587, secure: false },
+      { host: 'smtp.office365.com', port: 587, secure: false },
+      { host: 'smtp.office365.com', port: 465, secure: true },
+      { host: config.email.smtpHost || 'smtp.office365.com', port: config.email.smtpPort || 587, secure: false },
+      { host: 'smtp.yandex.ru', port: 465, secure: true },
       { host: 'smtp.gmail.com', port: 465, secure: true },
       { host: 'smtp.mail.ru', port: 465, secure: true },
     ];
+
 
     for (const cfg of configsToTry) {
       try {

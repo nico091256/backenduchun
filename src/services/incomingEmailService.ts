@@ -113,10 +113,11 @@ class IncomingEmailService {
   private async fetchUnreadEmails(acc: EmailAccountConfig) {
     const candidateHosts = [acc.host];
     if (acc.user.includes('di.uz') || acc.user.includes('@')) {
-      ['imap.yandex.ru', 'mail.di.uz', 'imap.di.uz', 'imap.mail.ru', 'imap.gmail.com'].forEach(h => {
+      ['outlook.office365.com', 'imap-mail.outlook.com', 'imap.yandex.ru', 'mail.di.uz', 'imap.di.uz', 'imap.mail.ru', 'imap.gmail.com'].forEach(h => {
         if (!candidateHosts.includes(h)) candidateHosts.push(h);
       });
     }
+
 
     let client: ImapFlow | null = null;
     let connectedHost = '';
