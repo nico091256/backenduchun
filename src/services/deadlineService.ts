@@ -1,6 +1,5 @@
 import cron from 'node-cron';
 import { prisma } from '../utils/prisma';
-import { telegramService } from './telegramService';
 
 class DeadlineService {
   start() {
@@ -70,23 +69,6 @@ class DeadlineService {
           },
         });
 
-        // Telegram — tasdiqlovchiga
-        telegramService.sendDeadlineExpired(step.approverId, {
-          id: step.documentId,
-          title: step.document.title,
-          docNumber: step.document.docNumber,
-          role: 'approver',
-          stepOrder: step.stepOrder,
-        }).catch(() => { });
-
-        // Telegram — yaratuvchiga
-        telegramService.sendDeadlineExpired(step.document.creatorId, {
-          id: step.documentId,
-          title: step.document.title,
-          docNumber: step.document.docNumber,
-          role: 'creator',
-          stepOrder: step.stepOrder,
-        }).catch(() => { });
       }
 
       // 2. Umumiy muddati o'tgan hujjatlarni EXPIRED qilish
@@ -124,13 +106,6 @@ class DeadlineService {
           },
         });
 
-        // Telegram: egasiga
-        telegramService.sendDeadlineExpired(doc.creatorId, {
-          id: doc.id,
-          title: doc.title,
-          docNumber: doc.docNumber,
-          role: 'creator',
-        }).catch(() => { });
 
         // Agar mas'ul ijrochi bo'lsa va u yaratuvchining o'zi bo'lmasa, ijrochiga ham bildirishnoma
         if (doc.executorId && doc.executorId !== doc.creatorId) {
@@ -145,13 +120,6 @@ class DeadlineService {
             },
           });
 
-          // Telegram: ijrochiga
-          telegramService.sendDeadlineExpired(doc.executorId, {
-            id: doc.id,
-            title: doc.title,
-            docNumber: doc.docNumber,
-            role: 'executor',
-          }).catch(() => { });
         }
       }
 
@@ -180,15 +148,6 @@ class DeadlineService {
           },
         });
 
-        if (step.stepDeadline) {
-          telegramService.sendDeadlineWarning(step.approverId, {
-            id: step.documentId,
-            title: step.document.title,
-            docNumber: step.document.docNumber,
-            deadline: step.stepDeadline,
-            role: 'approver',
-          }).catch(() => { });
-        }
 
         await prisma.approvalStep.update({
           where: { id: step.id },

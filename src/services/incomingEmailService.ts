@@ -6,7 +6,6 @@ import cron from 'node-cron';
 import { v4 as uuidv4 } from 'uuid';
 import { prisma } from '../utils/prisma';
 import { config } from '../config';
-import { telegramService } from './telegramService';
 
 interface EmailAccountConfig {
   name: string;
@@ -345,17 +344,7 @@ class IncomingEmailService {
           },
         });
 
-        // Send Telegram notification if user has chatId
-        if (admin.telegramChatId) {
-          const text =
-            `📩 <b>Yangi kiruvchi email xat keldi!</b>\n\n` +
-            `📋 <b>Mavzu:</b> ${title}\n` +
-            `👤 <b>Jo'natuvchi:</b> ${sender}\n` +
-            `🔖 <b>Hujjat Raqami:</b> #${docNumber}\n\n` +
-            `<i>Iltimos, sahifaga kirib, mas'ul ijrochini biriktiring va ijroga yo'naltiring.</i>`;
 
-          await telegramService.sendToUser(admin.id, text, docId);
-        }
       }
     } catch (err) {
       console.error('❌ [IncomingEmailService] Error sending notifications to admins:', err);

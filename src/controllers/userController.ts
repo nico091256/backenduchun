@@ -20,7 +20,6 @@ export const getUsers = async (_req: Request, res: Response): Promise<void> => {
         phone: true,
         isActive: true,
         permissions: true,
-        telegramChatId: true,
         createdAt: true,
         _count: {
           select: {
@@ -58,7 +57,6 @@ export const getUserById = async (req: Request, res: Response): Promise<void> =>
         phone: true,
         isActive: true,
         permissions: true,
-        telegramChatId: true,
         createdAt: true,
       },
     });
@@ -81,7 +79,7 @@ export const getUserById = async (req: Request, res: Response): Promise<void> =>
 // POST /api/users
 export const createUser = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { fullName, email, password, role, department, position, phone, permissions, telegramChatId } = req.body;
+    const { fullName, email, password, role, department, position, phone, permissions } = req.body;
 
     if (!fullName || !email || !password || !role) {
       sendError(res, 'To\'liq ism, email, parol va rol talab etiladi', 400);
@@ -108,7 +106,6 @@ export const createUser = async (req: Request, res: Response): Promise<void> => 
         department,
         position,
         phone,
-        telegramChatId: telegramChatId ? String(telegramChatId).trim() : null,
         permissions: JSON.stringify(assignedPermissions),
       },
       select: {
@@ -118,7 +115,6 @@ export const createUser = async (req: Request, res: Response): Promise<void> => 
         role: true,
         department: true,
         position: true,
-        telegramChatId: true,
         isActive: true,
         permissions: true,
         createdAt: true,
@@ -138,7 +134,7 @@ export const createUser = async (req: Request, res: Response): Promise<void> => 
 // PATCH /api/users/:id
 export const updateUser = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { fullName, email, department, position, phone, isActive, role, permissions, telegramChatId } = req.body;
+    const { fullName, email, department, position, phone, isActive, role, permissions } = req.body;
     const userId = parseInt(req.params.id);
 
     // Agar email almashtirilayotgan bo'lsa, boshqa foydalanuvchida yo'qligini tekshirish
@@ -161,7 +157,6 @@ export const updateUser = async (req: Request, res: Response): Promise<void> => 
       ...(department !== undefined && { department }),
       ...(position !== undefined && { position }),
       ...(phone !== undefined && { phone }),
-      ...(telegramChatId !== undefined && { telegramChatId: telegramChatId ? String(telegramChatId).trim() : null }),
       ...(isActive !== undefined && { isActive }),
       ...(role !== undefined && { role }),
     };
@@ -182,7 +177,6 @@ export const updateUser = async (req: Request, res: Response): Promise<void> => 
         department: true,
         position: true,
         phone: true,
-        telegramChatId: true,
         isActive: true,
         permissions: true,
       },

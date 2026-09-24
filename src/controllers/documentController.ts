@@ -1128,45 +1128,7 @@ export const viewDocumentAttachment = async (req: AuthRequest, res: Response): P
       // socket fallback
     }
 
-    try {
-      // Telegram orqali xabar yuborish
-      const { telegramService } = require('../services/telegramService');
 
-      // Yaratuvchiga xabar (agar u faylni o'zi ko'rmagan bo'lsa)
-      if (viewerId !== doc.creatorId) {
-        telegramService.sendFileViewed(doc.creatorId, {
-          id: docId,
-          title: doc.title,
-          docNumber: doc.docNumber,
-          viewerName: viewer.fullName,
-          viewerDepartment: viewer.department,
-          fileName: attachment.fileName,
-        }).catch(() => {});
-      }
-
-      // ADMIN larга ham xabar yuborish (yaratuvchi admin bo'lmasa ham)
-      const admins = await prisma.user.findMany({
-        where: {
-          role: 'ADMIN',
-          isActive: true,
-          telegramChatId: { not: null },
-          id: { notIn: [viewerId, doc.creatorId] }, // viewer va yaratuvchi allaqachon oldi
-        },
-        select: { id: true },
-      });
-      for (const admin of admins) {
-        telegramService.sendFileViewed(admin.id, {
-          id: docId,
-          title: doc.title,
-          docNumber: doc.docNumber,
-          viewerName: viewer.fullName,
-          viewerDepartment: viewer.department,
-          fileName: attachment.fileName,
-        }).catch(() => {});
-      }
-    } catch {
-      // telegram fallback
-    }
 
     sendSuccess(res, null, 'Fayl ko\'rish qayd etildi');
   } catch (err) {

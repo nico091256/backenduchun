@@ -48,18 +48,7 @@ class WorkflowService {
           `"${document.title}" hujjati to'g'ridan-to'g'ri ijro etishingiz uchun yo'naltirildi.`
         );
 
-        // Telegram — ijrochiga
-        try {
-          const { telegramService } = require('./telegramService');
-          telegramService.sendExecutionAssigned(document.executorId, {
-            id: documentId,
-            title: document.title,
-            docNumber: document.docNumber,
-            creatorName: document.creator?.fullName,
-            creatorDepartment: document.creator?.department,
-            deadline: document.overallDeadline,
-          }).catch(() => {});
-        } catch { /* telegram fallback */ }
+
       }
 
       // Hujjat yaratuvchisiga bildirishnoma
@@ -110,20 +99,7 @@ class WorkflowService {
         `"${document.title}" hujjati sizning tasdiqlashingizni kutmoqda.`
       );
 
-      // Telegram — tasdiqlovchiga (boyitilgan shablon)
-      try {
-        const { telegramService } = require('./telegramService');
-        telegramService.sendApprovalRequest(firstStep.approverId, {
-          id: documentId,
-          title: document.title,
-          docNumber: document.docNumber,
-          creatorName: document.creator?.fullName,
-          creatorDepartment: document.creator?.department,
-          deadline: firstStep.stepDeadline,
-          stepOrder: firstStep.stepOrder,
-          totalSteps,
-        }).catch(() => {});
-      } catch { /* telegram fallback */ }
+
     }
 
     return document;
@@ -192,20 +168,7 @@ class WorkflowService {
         `"${document.title}" hujjati ${currentStep.stepOrder}-bosqichdan o'tdi. Sizning tasdiqlashingizni kutmoqda.`
       );
 
-      // Telegram — keyingi tasdiqlovchiga
-      try {
-        const { telegramService } = require('./telegramService');
-        telegramService.sendApprovalRequest(nextStep.approverId, {
-          id: documentId,
-          title: document.title,
-          docNumber: document.docNumber,
-          creatorName: document.creator?.fullName,
-          creatorDepartment: document.creator?.department,
-          deadline: nextStep.stepDeadline,
-          stepOrder: nextStep.stepOrder,
-          totalSteps,
-        }).catch(() => {});
-      } catch { /* telegram fallback */ }
+
 
       // Tarixga yozish
       await prisma.taskHistory.create({
@@ -241,16 +204,7 @@ class WorkflowService {
         `"${document.title}" hujjati barcha bosqichlardan o'tdi. Endi ijro qilib, javob xatini yuboring.`
       );
 
-      // Telegram — yaratuvchiga
-      try {
-        const { telegramService } = require('./telegramService');
-        telegramService.sendDocumentApproved(document.creatorId, {
-          id: documentId,
-          title: document.title,
-          docNumber: document.docNumber,
-          approvedBy: currentStep.approver?.fullName,
-        }).catch(() => {});
-      } catch { /* telegram fallback */ }
+
 
       // Ijrochiga bildirishnoma (hujjat ijroga o'tganda)
       if (document.executorId && document.executorId !== document.creatorId) {
@@ -262,18 +216,7 @@ class WorkflowService {
           `"${document.title}" hujjati barcha bosqichlardan o'tdi. Ijroni boshlashingiz mumkin.`
         );
 
-        // Telegram — ijrochiga
-        try {
-          const { telegramService } = require('./telegramService');
-          telegramService.sendExecutionAssigned(document.executorId, {
-            id: documentId,
-            title: document.title,
-            docNumber: document.docNumber,
-            creatorName: document.creator?.fullName,
-            creatorDepartment: document.creator?.department,
-            deadline: document.overallDeadline,
-          }).catch(() => {});
-        } catch { /* telegram fallback */ }
+
       }
 
       return updatedDoc;
@@ -331,19 +274,7 @@ class WorkflowService {
       `"${document.title}" hujjati rad etildi. Sabab: ${comment}`
     );
 
-    // Telegram — yaratuvchiga (boyitilgan shablon)
-    try {
-      const { telegramService } = require('./telegramService');
-      telegramService.sendDocumentRejected(document.creatorId, {
-        id: documentId,
-        title: document.title,
-        docNumber: document.docNumber,
-        rejectorName: currentStep?.approver?.fullName,
-        rejectorDepartment: currentStep?.approver?.department,
-        stepOrder: currentStep?.stepOrder,
-        reason: comment,
-      }).catch(() => {});
-    } catch { /* telegram fallback */ }
+
 
     return updatedDoc;
   }
@@ -409,19 +340,7 @@ class WorkflowService {
         `"${document.title}" bo'yicha ijro yakunlandi va javob hujjati yuborildi.`
       );
 
-      // Telegram — yaratuvchiga (ijrochi ismi, bo'limi, izoh, fayl bor-yo'qligi)
-      try {
-        const { telegramService } = require('./telegramService');
-        telegramService.sendExecutionCompleted(document.creatorId, {
-          id: documentId,
-          title: document.title,
-          docNumber: document.docNumber,
-          executorName: document.executor?.fullName,
-          executorDepartment: document.executor?.department,
-          note: executionNote,
-          hasFile: Boolean(fileData),
-        }).catch(() => {});
-      } catch { /* telegram fallback */ }
+
     }
 
     return updatedDoc;

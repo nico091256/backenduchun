@@ -2,7 +2,6 @@ import { Response } from 'express';
 import { AuthRequest } from '../middleware/auth';
 import { prisma } from '../utils/prisma';
 import { sendSuccess, sendError } from '../utils/apiResponse';
-import { telegramService } from '../services/telegramService';
 import { emailService } from '../services/emailService';
 import { incomingEmailService } from '../services/incomingEmailService';
 
@@ -148,18 +147,7 @@ export class IncomingEmailController {
           console.error('Failed to create in-app notification:', notifErr);
         }
 
-        // Telegram Notification
-        try {
-          await telegramService.sendExecutionAssigned(executorUser.id, {
-            id: updatedDoc.id,
-            title: updatedDoc.title,
-            docNumber: updatedDoc.docNumber,
-            creatorName: req.user?.email || 'Administrator',
-            deadline: updatedDoc.overallDeadline,
-          });
-        } catch (tgErr) {
-          console.error('Failed to send Telegram notification:', tgErr);
-        }
+
 
         // Email Notification
         if (executorUser.email) {

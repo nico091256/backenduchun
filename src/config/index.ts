@@ -21,8 +21,6 @@ export const config = {
   // Frontend
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000',
 
-  // Telegram Bot
-  telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
 
   // Email Notification & IMAP Settings (Microsoft Office 365 / Outlook for Discover Invest)
   email: {
