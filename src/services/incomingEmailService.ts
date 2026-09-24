@@ -123,8 +123,9 @@ class IncomingEmailService {
     let connectedHost = '';
 
     for (const host of candidateHosts) {
+      let testClient: ImapFlow | null = null;
       try {
-        const testClient = new ImapFlow({
+        testClient = new ImapFlow({
           host,
           port: acc.port,
           secure: true,
@@ -135,12 +136,24 @@ class IncomingEmailService {
           logger: false,
         });
 
+        // Register error handler to catch connection / socket errors (ECONNRESET, TLS errors)
+        // and prevent Node.js from throwing unhandled 'error' event and crashing the process.
+        testClient.on('error', (err) => {
+          console.warn(`⚠️ [IncomingEmailService] ImapFlow error for ${acc.user} (${host}):`, err?.message || err);
+        });
+
         await testClient.connect();
         client = testClient;
         connectedHost = host;
         break;
       } catch {
-        // Try next host
+        if (testClient) {
+          try {
+            await testClient.logout();
+          } catch {
+            // Ignore failure on cleanup of failed attempt
+          }
+        }
       }
     }
 
@@ -150,7 +163,13 @@ class IncomingEmailService {
     }
 
     try {
-      const lock = await client.getMailboxLock('INBOX');
+      let lock;
+      try {
+        lock = await client.getMailboxLock('INBOX');
+      } catch (lockErr) {
+        console.warn(`⚠️ [IncomingEmailService] Could not acquire mailbox lock for ${acc.user}:`, lockErr);
+        return;
+      }
 
       try {
         // Find unseen message UIDs
@@ -160,7 +179,6 @@ class IncomingEmailService {
         }
 
         console.log(`📬 [IncomingEmailService] Connected via ${connectedHost}. Found ${unseenUids.length} unread email(s) in ${acc.name} (${acc.user})`);
-
 
         // Get or determine system admin user to attach as creator
         const adminUser = await this.getSystemAdminUser();
@@ -184,12 +202,24 @@ class IncomingEmailService {
           }
         }
       } finally {
-        lock.release();
+        if (lock) {
+          try {
+            lock.release();
+          } catch {
+            // Ignore lock release error if socket closed
+          }
+        }
       }
-
-      await client.logout();
     } catch (error) {
-      console.error(`❌ [IncomingEmailService] IMAP connection failed for ${acc.name}:`, error);
+      console.error(`❌ [IncomingEmailService] IMAP connection/operation error for ${acc.name}:`, error);
+    } finally {
+      if (client) {
+        try {
+          await client.logout();
+        } catch {
+          // Ignore logout error on closed connection
+        }
+      }
     }
   }
 

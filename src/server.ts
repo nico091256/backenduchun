@@ -71,6 +71,15 @@ const startServer = async () => {
   }
 };
 
+// Global Exception Handlers to safeguard server process from crashing on unhandled socket / network errors
+process.on('uncaughtException', (err) => {
+  console.error('💥 [Global Uncaught Exception]:', err?.message || err);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('💥 [Global Unhandled Rejection]:', reason);
+});
+
 // Graceful shutdown
 process.on('SIGTERM', async () => {
   console.log('⏹️ Server to\'xtatilmoqda...');
