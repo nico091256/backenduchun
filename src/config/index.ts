@@ -6,7 +6,7 @@ export const config = {
   nodeEnv: process.env.NODE_ENV || 'development',
 
   // CORS
-  allowedOrigins: (process.env.ALLOWED_ORIGINS || 'http://localhost:3000').split(','),
+  allowedOrigins: (process.env.ALLOWED_ORIGINS || 'http://localhost:3000,http://localhost:3001,http://bpm.di.uz,https://bpm.di.uz,http://10.99.1.208:3001').split(','),
 
   // JWT
   jwtSecret: process.env.JWT_SECRET || 'fallback_jwt_secret_change_in_production',
