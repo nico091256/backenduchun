@@ -30,22 +30,36 @@ class EmailService {
    * General email sending function
    */
   async sendEmail(options: { to: string; subject: string; html: string; text?: string }) {
-    const { smtpUser, smtpPass } = config.email;
-
-    if (!smtpUser || !smtpPass) {
-      console.warn(`⚠️ [EmailService] Skipping email to ${options.to}. SMTP credentials not configured.`);
-      return false;
-    }
+    const { smtpHost, smtpPort, smtpSecure, smtpUser, smtpPass } = config.email;
+    const sender = smtpUser || 'info@di.uz';
 
     const configsToTry = [
-      { host: 'smtp.office365.com', port: 587, secure: false },
-      { host: 'smtp.office365.com', port: 465, secure: true },
-      { host: config.email.smtpHost || 'smtp.office365.com', port: config.email.smtpPort || 587, secure: false },
-      { host: 'smtp.yandex.ru', port: 465, secure: true },
-      { host: 'smtp.gmail.com', port: 465, secure: true },
-      { host: 'smtp.mail.ru', port: 465, secure: true },
+      // 1. Internal configured mail server (10.1.1.122 port 587 with auth if provided)
+      {
+        host: smtpHost || '10.1.1.122',
+        port: smtpPort || 587,
+        secure: smtpSecure,
+        auth: smtpUser && smtpPass ? { user: smtpUser, pass: smtpPass } : undefined,
+      },
+      // 2. Internal mail server Port 25 (IP Relay without auth)
+      {
+        host: smtpHost || '10.1.1.122',
+        port: 25,
+        secure: false,
+        auth: undefined,
+      },
+      // 3. Internal mail server Port 587 (without auth fallback)
+      {
+        host: smtpHost || '10.1.1.122',
+        port: 587,
+        secure: false,
+        auth: undefined,
+      },
+      // 4. External Office 365 fallback if credentials exist
+      ...(smtpUser && smtpPass ? [
+        { host: 'smtp.office365.com', port: 587, secure: false, auth: { user: smtpUser, pass: smtpPass } },
+      ] : []),
     ];
-
 
     for (const cfg of configsToTry) {
       try {
@@ -53,17 +67,12 @@ class EmailService {
           host: cfg.host,
           port: cfg.port,
           secure: cfg.secure,
-          auth: {
-            user: smtpUser,
-            pass: smtpPass,
-          },
-          tls: {
-            rejectUnauthorized: false,
-          },
+          auth: cfg.auth,
+          tls: { rejectUnauthorized: false },
         });
 
         const info = await transporter.sendMail({
-          from: `"BPM Tizimi" <${smtpUser}>`,
+          from: `"Discover Invest BPM" <${sender}>`,
           to: options.to,
           subject: options.subject,
           html: options.html,
@@ -77,7 +86,7 @@ class EmailService {
       }
     }
 
-    console.error(`❌ [EmailService] All SMTP fallback attempts failed for ${options.to}. Check App Password / SMTP settings.`);
+    console.error(`❌ [EmailService] All SMTP fallback attempts failed for ${options.to}.`);
     return false;
   }
 
