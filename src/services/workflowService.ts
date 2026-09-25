@@ -1,4 +1,5 @@
 import { prisma } from '../utils/prisma';
+import { emailService } from './emailService';
 
 class WorkflowService {
   // Hujjatni tasdiqlashga yoki to'g'ridan-to'g'ri ijroga yuborish
@@ -11,7 +12,7 @@ class WorkflowService {
           include: { approver: true },
         },
         creator: { select: { id: true, fullName: true, department: true } },
-        executor: { select: { id: true, fullName: true, department: true } },
+        executor: { select: { id: true, fullName: true, email: true, department: true } },
       },
     });
 
@@ -38,7 +39,7 @@ class WorkflowService {
         },
       });
 
-      // Mas'ul ijrochiga bildirishnoma
+      // Mas'ul ijrochiga bildirishnoma hamda Email xabarnoma yuborish
       if (document.executorId && document.executorId !== userId) {
         await this.sendNotification(
           document.executorId,
@@ -48,7 +49,19 @@ class WorkflowService {
           `"${document.title}" hujjati to'g'ridan-to'g'ri ijro etishingiz uchun yo'naltirildi.`
         );
 
-
+        if (existingDoc.executor && existingDoc.executor.email) {
+          emailService.sendTaskAssignedEmail({
+            toEmail: existingDoc.executor.email,
+            executorName: existingDoc.executor.fullName,
+            docNumber: existingDoc.docNumber,
+            docTitle: existingDoc.title,
+            deadline: existingDoc.overallDeadline
+              ? new Date(existingDoc.overallDeadline).toLocaleDateString('uz-UZ')
+              : undefined,
+            resolution: existingDoc.resolution || undefined,
+            docId: existingDoc.id,
+          }).catch((mailErr) => console.error('Failed to send task assigned email:', mailErr));
+        }
       }
 
       // Hujjat yaratuvchisiga bildirishnoma

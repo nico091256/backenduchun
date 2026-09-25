@@ -3,6 +3,7 @@ import { prisma } from '../utils/prisma';
 import { sendSuccess, sendError, sendCreated } from '../utils/apiResponse';
 import { AuthRequest } from '../middleware/auth';
 import { workflowService } from '../services/workflowService';
+import { emailService } from '../services/emailService';
 import path from 'path';
 import fs from 'fs';
 import { config } from '../config';
@@ -364,7 +365,7 @@ export const createDocument = async (req: AuthRequest, res: Response): Promise<v
       },
       include: {
         creator: { select: { id: true, fullName: true, email: true, department: true } },
-        executor: { select: { id: true, fullName: true, department: true } },
+        executor: { select: { id: true, fullName: true, email: true, department: true } },
         parentDoc: { select: { id: true, docNumber: true, title: true, docType: true } },
         attachments: true,
         approvalSteps: {
@@ -372,6 +373,38 @@ export const createDocument = async (req: AuthRequest, res: Response): Promise<v
         },
       },
     });
+
+    // Mas'ul ijrochiga bildirishnoma hamda Email xabarnoma yuborish
+    if (document.executorId && document.executor) {
+      try {
+        await prisma.notification.create({
+          data: {
+            userId: document.executor.id,
+            documentId: document.id,
+            type: 'APPROVAL_REQUEST',
+            title: '📥 Yangi Topshiriq',
+            message: `Sizga "${document.title}" (#${document.docNumber}) hujjati ijroga biriktirildi.`,
+            link: `/dashboard/documents/${document.id}`,
+          },
+        });
+      } catch (notifErr) {
+        console.error('Failed to create in-app notification for executor:', notifErr);
+      }
+
+      if (document.executor.email) {
+        emailService.sendTaskAssignedEmail({
+          toEmail: document.executor.email,
+          executorName: document.executor.fullName,
+          docNumber: document.docNumber,
+          docTitle: document.title,
+          deadline: document.overallDeadline
+            ? new Date(document.overallDeadline).toLocaleDateString('uz-UZ')
+            : undefined,
+          resolution: document.resolution || undefined,
+          docId: document.id,
+        }).catch((mailErr) => console.error('Failed to send task assigned email:', mailErr));
+      }
+    }
 
     sendCreated(res, document, 'Hujjat muvaffaqiyatli yaratildi');
   } catch (err: any) {
