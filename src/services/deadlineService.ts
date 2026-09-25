@@ -18,11 +18,14 @@ class DeadlineService {
     const now = new Date();
 
     try {
-      // 1. Muddati o'tgan approval step'larni EXPIRED qilish
+      // 1. Muddati o'tgan approval step'larni EXPIRED qilish (Faqat hali jarayonda bo'lgan hujjatlar uchun)
       const expiredSteps = await prisma.approvalStep.findMany({
         where: {
           stepStatus: 'PENDING',
           stepDeadline: { lt: now },
+          document: {
+            status: { in: ['IN_APPROVAL', 'IN_EXECUTION'] },
+          },
         },
         include: {
           document: { select: { id: true, title: true, creatorId: true, docNumber: true } },
