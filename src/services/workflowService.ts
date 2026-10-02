@@ -1,5 +1,6 @@
 import { prisma } from '../utils/prisma';
 import { emailService } from './emailService';
+import { config } from '../config';
 
 class WorkflowService {
   // Hujjatni tasdiqlashga yoki to'g'ridan-to'g'ri ijroga yuborish
@@ -13,6 +14,7 @@ class WorkflowService {
         },
         creator: { select: { id: true, fullName: true, department: true } },
         executor: { select: { id: true, fullName: true, email: true, department: true } },
+        coExecutors: { include: { user: { select: { id: true, fullName: true, email: true, department: true } } } },
       },
     });
 
@@ -40,7 +42,7 @@ class WorkflowService {
       });
 
       // Mas'ul ijrochiga bildirishnoma hamda Email xabarnoma yuborish
-      if (document.executorId && document.executorId !== userId) {
+      if (document.executorId) {
         await this.sendNotification(
           document.executorId,
           documentId,
@@ -64,14 +66,43 @@ class WorkflowService {
         }
       }
 
-      // Hujjat yaratuvchisiga bildirishnoma
-      await this.sendNotification(
-        document.creatorId,
-        documentId,
-        'APPROVED',
-        'Hujjat ijroga yo\'naltirildi! 🚀',
-        `"${document.title}" hujjati to'g'ridan-to'g'ri ijro holatiga o'tkazildi.`
-      );
+      // Ham-ijrochilarga ham bildirishnoma va Email yuborish
+      if (existingDoc.coExecutors && existingDoc.coExecutors.length > 0) {
+        for (const ce of existingDoc.coExecutors) {
+          await this.sendNotification(
+            ce.userId,
+            documentId,
+            'APPROVAL_REQUEST',
+            'Ham-ijrochi sifatida topshiriq biriktirildi! 👥',
+            `"${existingDoc.title}" hujjatiga ham-ijrochi sifatida biriktirildingiz.`
+          );
+
+          if (ce.user?.email) {
+            emailService.sendTaskAssignedEmail({
+              toEmail: ce.user.email,
+              executorName: ce.user.fullName,
+              docNumber: existingDoc.docNumber,
+              docTitle: existingDoc.title,
+              deadline: existingDoc.overallDeadline
+                ? new Date(existingDoc.overallDeadline).toLocaleDateString('uz-UZ')
+                : undefined,
+              resolution: existingDoc.resolution || undefined,
+              docId: existingDoc.id,
+            }).catch((mailErr) => console.error('Failed to send task assigned email to co-executor:', mailErr));
+          }
+        }
+      }
+
+      // Faqat boshqa shaxs yuborgan bo'lsa yaratuvchiga bildirishnoma beriladi
+      if (document.creatorId !== userId) {
+        await this.sendNotification(
+          document.creatorId,
+          documentId,
+          'APPROVED',
+          'Hujjat ijroga yo\'naltirildi! 🚀',
+          `"${document.title}" hujjati to'g'ridan-to'g'ri ijro holatiga o'tkazildi.`
+        );
+      }
 
       return document;
     }
@@ -99,20 +130,32 @@ class WorkflowService {
       },
     });
 
-    // Birinchi bosqichdagi tasdiqlovchiga bildirishnoma yuborish
-    const firstStep = document.approvalSteps[0];
-    const totalSteps = document.approvalSteps.length;
+    // Birinchi bosqichdagi BARCHA (shu jumladan parallel) tasdiqlovchilarga bildirishnoma yuborish
+    if (document.approvalSteps.length > 0) {
+      const firstStepOrder = document.approvalSteps[0].stepOrder;
+      const activeFirstSteps = document.approvalSteps.filter((s) => s.stepOrder === firstStepOrder);
 
-    if (firstStep) {
-      await this.sendNotification(
-        firstStep.approverId,
-        documentId,
-        'APPROVAL_REQUEST',
-        'Yangi tasdiqlash so\'rovi',
-        `"${document.title}" hujjati sizning tasdiqlashingizni kutmoqda.`
-      );
+      for (const step of activeFirstSteps) {
+        await this.sendNotification(
+          step.approverId,
+          documentId,
+          'APPROVAL_REQUEST',
+          'Yangi tasdiqlash so\'rovi',
+          `"${document.title}" hujjati sizning tasdiqlashingizni kutmoqda.`
+        );
 
-
+        if (step.approver && (step.approver as any).email) {
+          emailService.sendApprovalRequestEmail({
+            toEmail: (step.approver as any).email,
+            approverName: (step.approver as any).fullName,
+            docNumber: document.docNumber,
+            docTitle: document.title,
+            creatorName: document.creator?.fullName || 'Xodim',
+            docId: document.id,
+            deadline: step.stepDeadline ? new Date(step.stepDeadline).toLocaleDateString('uz-UZ') : undefined,
+          }).catch((err) => console.error('Failed to send approval request email:', err));
+        }
+      }
     }
 
     return document;
@@ -130,16 +173,36 @@ class WorkflowService {
       },
     });
 
-    // Keyingi navbatdagi PENDING bosqichni qidirish
     const currentStep = await prisma.approvalStep.findUnique({
       where: { id: stepId },
       include: { approver: { select: { fullName: true, department: true } } },
     });
     if (!currentStep) throw new Error('Step not found');
 
-    const totalSteps = await prisma.approvalStep.count({ where: { documentId } });
+    // 1. Shu bosqich (stepOrder) da hali PENDING bo'lib turgan boshqa parallel tasdiqlovchilar bormi?
+    const remainingInSameOrder = await prisma.approvalStep.findMany({
+      where: {
+        documentId,
+        stepOrder: currentStep.stepOrder,
+        stepStatus: 'PENDING',
+      },
+      include: { approver: true },
+    });
 
-    // Joriy qadamdan keyingi eng yaqin PENDING qadamni qidiramiz
+    if (remainingInSameOrder.length > 0) {
+      // Parallel bosqich hali to'liq yakunlanmagan (qolgan ham-tasdiqlovchilar kutilmoqda)
+      await prisma.taskHistory.create({
+        data: {
+          documentId,
+          actionName: `APPROVED_STEP_${currentStep.stepOrder}`,
+          description: `${currentStep.stepOrder}-bosqichda ${currentStep.approver?.fullName || 'Tasdiqlovchi'} tasdiqladi (qolgan ${remainingInSameOrder.length} ta tasdiqlovchi kutilmoqda)${comment ? '. Izoh: ' + comment : ''}`,
+          performedById: userId,
+        },
+      });
+      return currentStep;
+    }
+
+    // 2. Ushbu stepOrder to'liq tasdiqlandi. Keyingi navbatdagi PENDING stepOrder qidiramiz
     let nextStep = await prisma.approvalStep.findFirst({
       where: {
         documentId,
@@ -149,18 +212,6 @@ class WorkflowService {
       orderBy: { stepOrder: 'asc' },
       include: { approver: true },
     });
-
-    // Agar keyinroq qadam topilmasa, boshqa qolib ketgan PENDING qadamlar bormi-yo'qligini tekshiramiz
-    if (!nextStep) {
-      nextStep = await prisma.approvalStep.findFirst({
-        where: {
-          documentId,
-          stepStatus: 'PENDING',
-        },
-        orderBy: { stepOrder: 'asc' },
-        include: { approver: true },
-      });
-    }
 
     const document = await prisma.document.findUnique({
       where: { id: documentId },
@@ -172,23 +223,44 @@ class WorkflowService {
     if (!document) throw new Error('Document not found');
 
     if (nextStep) {
-      // Keyingi bosqichga bildirishnoma yuborish
-      await this.sendNotification(
-        nextStep.approverId,
-        documentId,
-        'APPROVAL_REQUEST',
-        'Yangi tasdiqlash so\'rovi',
-        `"${document.title}" hujjati ${currentStep.stepOrder}-bosqichdan o'tdi. Sizning tasdiqlashingizni kutmoqda.`
-      );
+      // Keyingi bosqichdagi BARCHA parallel tasdiqlovchilarga bildirishnoma yuborish
+      const nextOrderSteps = await prisma.approvalStep.findMany({
+        where: {
+          documentId,
+          stepOrder: nextStep.stepOrder,
+          stepStatus: 'PENDING',
+        },
+        include: { approver: true },
+      });
 
+      for (const ns of nextOrderSteps) {
+        await this.sendNotification(
+          ns.approverId,
+          documentId,
+          'APPROVAL_REQUEST',
+          'Yangi tasdiqlash so\'rovi',
+          `"${document.title}" hujjati ${currentStep.stepOrder}-bosqichdan o'tdi. Sizning tasdiqlashingizni kutmoqda.`
+        );
 
+        if (ns.approver?.email) {
+          emailService.sendApprovalRequestEmail({
+            toEmail: ns.approver.email,
+            approverName: ns.approver.fullName,
+            docNumber: document.docNumber,
+            docTitle: document.title,
+            creatorName: document.creator?.fullName || 'Xodim',
+            docId: document.id,
+            deadline: ns.stepDeadline ? new Date(ns.stepDeadline).toLocaleDateString('uz-UZ') : undefined,
+          }).catch(err => console.error('Failed to send email to next approver:', err));
+        }
+      }
 
       // Tarixga yozish
       await prisma.taskHistory.create({
         data: {
           documentId,
           actionName: `APPROVED_STEP_${currentStep.stepOrder}`,
-          description: `${currentStep.stepOrder}-bosqich tasdiqlandi${comment ? '. Izoh: ' + comment : ''}`,
+          description: `${currentStep.stepOrder}-bosqich to'liq tasdiqlandi. ${nextStep.stepOrder}-bosqichga o'tdi${comment ? '. Izoh: ' + comment : ''}`,
           performedById: userId,
         },
       });
@@ -219,8 +291,16 @@ class WorkflowService {
 
 
 
-      // Ijrochiga bildirishnoma (hujjat ijroga o'tganda)
-      if (document.executorId && document.executorId !== document.creatorId) {
+      // Ijrochiga bildirishnoma va Email xabarnoma (hujjat ijroga o'tganda)
+      const docWithExec = await prisma.document.findUnique({
+        where: { id: documentId },
+        include: {
+          executor: { select: { fullName: true, email: true } },
+          coExecutors: { include: { user: { select: { id: true, fullName: true, email: true } } } },
+        },
+      });
+
+      if (document.executorId) {
         await this.sendNotification(
           document.executorId,
           documentId,
@@ -229,7 +309,46 @@ class WorkflowService {
           `"${document.title}" hujjati barcha bosqichlardan o'tdi. Ijroni boshlashingiz mumkin.`
         );
 
+        if (docWithExec?.executor?.email) {
+          emailService.sendTaskAssignedEmail({
+            toEmail: docWithExec.executor.email,
+            executorName: docWithExec.executor.fullName,
+            docNumber: docWithExec.docNumber,
+            docTitle: docWithExec.title,
+            deadline: docWithExec.overallDeadline
+              ? new Date(docWithExec.overallDeadline).toLocaleDateString('uz-UZ')
+              : undefined,
+            resolution: docWithExec.resolution || undefined,
+            docId: docWithExec.id,
+          }).catch((mailErr) => console.error('Failed to send task assigned email:', mailErr));
+        }
+      }
 
+      // Ham-ijrochilarga ham bildirishnoma va Email yuborish
+      if (docWithExec?.coExecutors && docWithExec.coExecutors.length > 0) {
+        for (const ce of docWithExec.coExecutors) {
+          await this.sendNotification(
+            ce.userId,
+            documentId,
+            'APPROVAL_REQUEST',
+            'Hujjat tasdiqlandi — Ham-ijro kutilmoqda! 📥',
+            `"${document.title}" hujjati barcha bosqichlardan o'tdi. Ham-ijrochi sifatida ishtirok etishingiz mumkin.`
+          );
+
+          if (ce.user?.email) {
+            emailService.sendTaskAssignedEmail({
+              toEmail: ce.user.email,
+              executorName: ce.user.fullName,
+              docNumber: docWithExec.docNumber,
+              docTitle: docWithExec.title,
+              deadline: docWithExec.overallDeadline
+                ? new Date(docWithExec.overallDeadline).toLocaleDateString('uz-UZ')
+                : undefined,
+              resolution: docWithExec.resolution || undefined,
+              docId: docWithExec.id,
+            }).catch((mailErr) => console.error('Failed to send task assigned email to co-executor:', mailErr));
+          }
+        }
       }
 
       return updatedDoc;
@@ -292,6 +411,83 @@ class WorkflowService {
     return updatedDoc;
   }
 
+  // Bosqichni qayta ishlashga qaytarish (Return for Revision)
+  async returnStepForRevision(stepId: number, documentId: number, comment: string, userId: number) {
+    await prisma.approvalStep.update({
+      where: { id: stepId },
+      data: {
+        stepStatus: 'RETURNED_FOR_REVISION',
+        comment,
+        actionDate: new Date(),
+      },
+    });
+
+    const currentStep = await prisma.approvalStep.findUnique({
+      where: { id: stepId },
+      include: { approver: { select: { fullName: true, department: true } } },
+    });
+    const document = await prisma.document.findUnique({
+      where: { id: documentId },
+      include: { creator: { select: { email: true, fullName: true } } },
+    });
+
+    if (!document) throw new Error('Document not found');
+
+    // Qolgan kutilayotgan bosqichlarni SKIPPED qilish
+    await prisma.approvalStep.updateMany({
+      where: { documentId, stepStatus: 'PENDING' },
+      data: { stepStatus: 'SKIPPED' },
+    });
+
+    // Hujjatni RETURNED_FOR_REVISION holatiga o'tkazish
+    const updatedDoc = await prisma.document.update({
+      where: { id: documentId },
+      data: {
+        status: 'RETURNED_FOR_REVISION',
+        history: {
+          create: {
+            actionName: `RETURNED_FOR_REVISION_STEP_${currentStep?.stepOrder}`,
+            description: `${currentStep?.stepOrder}-bosqichda qayta ishlashga qaytarildi. Sabab: ${comment}`,
+            performedById: userId,
+          },
+        },
+      },
+    });
+
+    // Hujjat egasiga in-app bildirishnoma
+    await this.sendNotification(
+      document.creatorId,
+      documentId,
+      'REVISION_REQUEST',
+      'Hujjat qayta ishlashga qaytarildi 📝',
+      `"${document.title}" hujjati qayta ishlashga qaytarildi. Sabab: ${comment}`
+    );
+
+    // Email bildirishnoma
+    if (document.creator?.email) {
+      emailService.sendEmail({
+        to: document.creator.email,
+        subject: `[BPM] Hujjat qayta ishlashga qaytarildi: "${document.title}"`,
+        html: `
+          <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px;">
+            <h2 style="color: #D97706; margin-top: 0;">📝 Hujjat qayta ishlashga qaytarildi</h2>
+            <p>Hurmatli <strong>${document.creator.fullName}</strong>,</p>
+            <p>Siz yaratgan <strong>"${document.title}"</strong> hujjati tasdiqlovchi tomonidan kamchiliklarni bartaraf etish uchun qaytarildi.</p>
+            <div style="background: #FFFBEB; border-left: 4px solid #F59E0B; padding: 12px; margin: 15px 0; border-radius: 4px;">
+              <strong>Qaytaruvchi:</strong> ${currentStep?.approver?.fullName || 'Tasdiqlovchi'}<br/>
+              <strong>Izoh / Sabab:</strong> ${comment}
+            </div>
+            <p>Iltimos, ko'rsatilgan kamchiliklarni to'g'rilab, hujjatni qayta tasdiqlashga yuboring.</p>
+            <p><a href="${config.frontendUrl}/dashboard/documents/${documentId}" style="display: inline-block; background: #D97706; color: #fff; padding: 10px 18px; text-decoration: none; border-radius: 6px; font-weight: bold;">Hujjatni ochish va tahrirlash</a></p>
+          </div>
+        `,
+      }).catch(err => console.error('Failed to send revision email:', err));
+    }
+
+    return updatedDoc;
+  }
+
+
   // Ijroni yakunlash (Javob hujjati yuborish)
   async executeDocument(
     documentId: number,
@@ -341,6 +537,40 @@ class WorkflowService {
           uploadedById: userId,
         },
       });
+    }
+
+    // Bog'langan barcha topshiriqlarni ham avtomatik COMPLETED holatiga o'tkazish
+    try {
+      const linkedTasks = await prisma.task.findMany({
+        where: { documentId, status: { not: 'COMPLETED' } },
+      });
+
+      for (const t of linkedTasks) {
+        await prisma.task.update({
+          where: { id: t.id },
+          data: {
+            status: 'COMPLETED',
+            completedAt: new Date(),
+            resultNote: executionNote,
+            ...(fileData && {
+              resultFileUrl: fileData.fileUrl,
+              resultFileName: fileData.fileName,
+              resultFileSize: fileData.fileSize,
+            }),
+          },
+        });
+
+        await prisma.taskActivity.create({
+          data: {
+            taskId: t.id,
+            action: 'COMPLETED',
+            description: `Hujjat ijrosi yakunlangani sababli topshiriq ham avtomatik ravishda yakunlandi: ${executionNote.slice(0, 100)}`,
+            performedById: userId,
+          },
+        });
+      }
+    } catch (e) {
+      console.error('Error synchronizing linked tasks on executeDocument:', e);
     }
 
     // Hujjat egasiga in-app bildirishnoma

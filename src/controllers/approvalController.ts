@@ -27,14 +27,28 @@ export const getMyPendingApprovals = async (req: AuthRequest, res: Response): Pr
       return;
     }
 
-    // Oddiy foydalanuvchi: faqat o'ziga tegishli PENDING bosqichlar
+    // Foydalanuvchiga topshirilgan faol delegatsiyalarni topish
+    const activeDelegations = await prisma.delegation.findMany({
+      where: {
+        delegateId: req.user!.userId,
+        isActive: true,
+        startDate: { lte: new Date() },
+        endDate: { gte: new Date() },
+      },
+      select: { delegatorId: true },
+    });
+
+    const approverIds = [req.user!.userId, ...activeDelegations.map((d) => d.delegatorId)];
+
+    // Oddiy foydalanuvchi: o'ziga va o'zi nomidan vakil bo'lgan PENDING bosqichlar
     const steps = await prisma.approvalStep.findMany({
       where: {
-        approverId: req.user!.userId,
+        approverId: { in: approverIds },
         stepStatus: 'PENDING',
       },
       orderBy: { stepDeadline: 'asc' },
       include: {
+        approver: { select: { id: true, fullName: true, department: true } },
         document: {
           include: {
             creator: { select: { id: true, fullName: true, email: true, department: true } },
@@ -216,7 +230,23 @@ export const approveStep = async (req: AuthRequest, res: Response): Promise<void
       return;
     }
 
-    if (step.approverId !== req.user!.userId) {
+    let isAuthorized = step.approverId === req.user!.userId || req.user!.role === 'ADMIN';
+    if (!isAuthorized) {
+      const activeDelegation = await prisma.delegation.findFirst({
+        where: {
+          delegatorId: step.approverId,
+          delegateId: req.user!.userId,
+          isActive: true,
+          startDate: { lte: new Date() },
+          endDate: { gte: new Date() },
+        },
+      });
+      if (activeDelegation) {
+        isAuthorized = true;
+      }
+    }
+
+    if (!isAuthorized) {
       sendError(res, 'Bu bosqichni tasdiqlash uchun ruxsat yo\'q', 403);
       return;
     }
@@ -243,7 +273,7 @@ export const approveStep = async (req: AuthRequest, res: Response): Promise<void
       orderBy: { stepOrder: 'asc' },
     });
 
-    if (currentActiveStep && currentActiveStep.id !== step.id) {
+    if (currentActiveStep && currentActiveStep.stepOrder < step.stepOrder) {
       sendError(res, 'Tasdiqlash navbati hali sizga yetib kelmagan', 400);
       return;
     }
@@ -277,7 +307,23 @@ export const rejectStep = async (req: AuthRequest, res: Response): Promise<void>
       return;
     }
 
-    if (step.approverId !== req.user!.userId) {
+    let isAuthorized = step.approverId === req.user!.userId || req.user!.role === 'ADMIN';
+    if (!isAuthorized) {
+      const activeDelegation = await prisma.delegation.findFirst({
+        where: {
+          delegatorId: step.approverId,
+          delegateId: req.user!.userId,
+          isActive: true,
+          startDate: { lte: new Date() },
+          endDate: { gte: new Date() },
+        },
+      });
+      if (activeDelegation) {
+        isAuthorized = true;
+      }
+    }
+
+    if (!isAuthorized) {
       sendError(res, 'Bu bosqichni rad etish uchun ruxsat yo\'q', 403);
       return;
     }
@@ -289,6 +335,61 @@ export const rejectStep = async (req: AuthRequest, res: Response): Promise<void>
 
     const result = await workflowService.rejectStep(step.id, step.documentId, comment, req.user!.userId);
     sendSuccess(res, result, 'Hujjat bosqichi rad etildi');
+  } catch (err) {
+    console.error(err);
+    sendError(res, 'Server xatosi', 500);
+  }
+};
+
+// POST /api/approvals/:stepId/return — Qayta ishlashga qaytarish (Return for Revision)
+export const returnStepForRevision = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { stepId } = req.params;
+    const { comment } = req.body;
+
+    if (!comment || comment.trim().length < 5) {
+      sendError(res, 'Qayta ishlashga qaytarish uchun izoh/sabab (kamida 5 ta belgi) talab etiladi', 400);
+      return;
+    }
+
+    const step = await prisma.approvalStep.findUnique({
+      where: { id: parseInt(stepId) },
+      include: { document: true },
+    });
+
+    if (!step) {
+      sendError(res, 'Tasdiqlash bosqichi topilmadi', 404);
+      return;
+    }
+
+    let isAuthorized = step.approverId === req.user!.userId || req.user!.role === 'ADMIN';
+    if (!isAuthorized) {
+      const activeDelegation = await prisma.delegation.findFirst({
+        where: {
+          delegatorId: step.approverId,
+          delegateId: req.user!.userId,
+          isActive: true,
+          startDate: { lte: new Date() },
+          endDate: { gte: new Date() },
+        },
+      });
+      if (activeDelegation) {
+        isAuthorized = true;
+      }
+    }
+
+    if (!isAuthorized) {
+      sendError(res, 'Bu bosqichni qaytarish uchun ruxsat yo\'q', 403);
+      return;
+    }
+
+    if (step.stepStatus !== 'PENDING') {
+      sendError(res, 'Bu bosqich allaqachon qayta ishlangan', 400);
+      return;
+    }
+
+    const result = await workflowService.returnStepForRevision(step.id, step.documentId, comment, req.user!.userId);
+    sendSuccess(res, result, 'Hujjat qayta ishlash uchun muallifga qaytarildi');
   } catch (err) {
     console.error(err);
     sendError(res, 'Server xatosi', 500);

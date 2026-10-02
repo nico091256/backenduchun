@@ -5,6 +5,7 @@ import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
 import path from 'path';
 import { config } from './config';
+import { authenticateFileAccess } from './middleware/auth';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 
 // Routes
@@ -17,6 +18,9 @@ import adminRoutes from './routes/adminRoutes';
 import kpiRoutes from './routes/kpiRoutes';
 import templateRoutes from './routes/templateRoutes';
 import incomingEmailRoutes from './routes/incomingEmailRoutes';
+import delegationRoutes from './routes/delegationRoutes';
+import departmentRoutes from './routes/departmentRoutes';
+import taskRoutes from './routes/taskRoutes';
 
 const app = express();
 
@@ -65,11 +69,11 @@ if (config.nodeEnv !== 'test') {
   app.use(morgan('dev'));
 }
 
-// ── Static Files (Uploads) ───────────────────────
-app.use('/uploads', express.static(path.join(process.cwd(), config.uploadDir)));
+// ── Static Files (Uploads - Himoyalangan xavfsiz fayllar) ──
+app.use('/uploads', authenticateFileAccess, express.static(path.join(process.cwd(), config.uploadDir)));
 
 // ── Health Check ─────────────────────────────────
-app.get('/health', (_req, res) => {
+app.get(['/health', '/api/health'], (_req, res) => {
   res.json({
     success: true,
     message: 'BPM Backend API ishlayapti ✅',
@@ -88,7 +92,9 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/kpi', kpiRoutes);
 app.use('/api/templates', templateRoutes);
 app.use('/api/incoming-emails', incomingEmailRoutes);
-
+app.use('/api/delegations', delegationRoutes);
+app.use('/api/departments', departmentRoutes);
+app.use('/api/tasks', taskRoutes);
 
 // ── Error Handlers ───────────────────────────────
 app.use(notFoundHandler);

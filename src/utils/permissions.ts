@@ -4,13 +4,27 @@ export type PermissionKey =
   | 'DOC_EXECUTE'
   | 'REPORTS_VIEW'
   | 'USERS_MANAGE'
-  | 'DOC_DELETE';
+  | 'DOC_DELETE'
+  | 'INCOMING_MANAGE'
+  | 'TEMPLATES_MANAGE'
+  | 'ASSIGN_TASK';
 
 export const DEFAULT_ROLE_PERMISSIONS: Record<string, PermissionKey[]> = {
-  ADMIN: ['DOC_CREATE', 'DOC_APPROVE', 'DOC_EXECUTE', 'REPORTS_VIEW', 'USERS_MANAGE', 'DOC_DELETE'],
-  INITIATOR: ['DOC_CREATE', 'DOC_EXECUTE'],
+  ADMIN: [
+    'DOC_CREATE',
+    'DOC_APPROVE',
+    'DOC_EXECUTE',
+    'REPORTS_VIEW',
+    'USERS_MANAGE',
+    'DOC_DELETE',
+    'INCOMING_MANAGE',
+    'TEMPLATES_MANAGE',
+    'ASSIGN_TASK',
+  ],
+  INITIATOR: ['DOC_CREATE', 'DOC_EXECUTE', 'TEMPLATES_MANAGE'],
   APPROVER: ['DOC_APPROVE', 'DOC_EXECUTE'],
   EXECUTOR: ['DOC_EXECUTE'],
+  SECRETARY: ['DOC_CREATE', 'DOC_EXECUTE', 'INCOMING_MANAGE', 'TEMPLATES_MANAGE'],
 };
 
 export const parsePermissions = (role: string, permissionsRaw?: string | null): PermissionKey[] => {

@@ -76,10 +76,13 @@ class DeadlineService {
 
       // 2. Umumiy muddati o'tgan hujjatlarni EXPIRED qilish
       // Faqat tasdiqlashda (IN_APPROVAL) yoki ijroda (IN_EXECUTION) bo'lgan hujjatlar muddati o'tgan hisoblanadi
+      // MUHIM: completedAt yoki executionNote mavjud bo'lsa, ijro allaqachon yakunlangan — EXPIRED qilmaslik
       const expiredDocs = await prisma.document.findMany({
         where: {
           status: { in: ['IN_APPROVAL', 'IN_EXECUTION'] },
           overallDeadline: { lt: now },
+          completedAt: null,       // Ijro yakunlanmagan bo'lsa
+          executionNote: null,     // Ijro izohi kiritilmagan bo'lsa
         },
       });
 

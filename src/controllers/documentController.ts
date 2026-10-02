@@ -4,9 +4,11 @@ import { sendSuccess, sendError, sendCreated } from '../utils/apiResponse';
 import { AuthRequest } from '../middleware/auth';
 import { workflowService } from '../services/workflowService';
 import { emailService } from '../services/emailService';
+import { hasPermission } from '../utils/permissions';
 import path from 'path';
 import fs from 'fs';
 import { config } from '../config';
+import { extractDepartmentCode } from '../utils/departmentsData';
 
 // UTF-8 file name encoding fixer for Multer / multipart uploads
 const decodeFilename = (name?: string): string => {
@@ -29,7 +31,7 @@ const parseSafeDate = (val?: any): Date | undefined => {
 // GET /api/documents
 export const getDocuments = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { status, priority, page = '1', limit = '10', search, docType } = req.query;
+    const { status, priority, page = '1', limit = '10', search, docType, scope } = req.query;
     const pageNum = parseInt(page as string, 10);
     const limitNum = parseInt(limit as string, 10);
     const skip = (pageNum - 1) * limitNum;
@@ -47,6 +49,7 @@ export const getDocuments = async (req: AuthRequest, res: Response): Promise<voi
         OR: [
           { creatorId: req.user!.userId },
           { executorId: req.user!.userId },
+          { coExecutors: { some: { userId: req.user!.userId } } },
           { approvalSteps: { some: { approverId: req.user!.userId } } },
         ],
       };
@@ -54,6 +57,51 @@ export const getDocuments = async (req: AuthRequest, res: Response): Promise<voi
         (where.AND as unknown[]).push(accessFilter);
       } else {
         where.AND = [accessFilter];
+      }
+    }
+
+    // Topshiriqlar ko'lami (Scope) filtrlari
+    if (scope === 'assigned_to_me') {
+      const assignedToMe = {
+        OR: [
+          { executorId: req.user!.userId },
+          { coExecutors: { some: { userId: req.user!.userId } } },
+        ],
+      };
+      if (where.AND) {
+        (where.AND as unknown[]).push(assignedToMe);
+      } else {
+        where.AND = [assignedToMe];
+      }
+    } else if (scope === 'assigned_by_me') {
+      const assignedByMe = {
+        creatorId: req.user!.userId,
+        executorId: { not: null },
+      };
+      if (where.AND) {
+        (where.AND as unknown[]).push(assignedByMe);
+      } else {
+        where.AND = [assignedByMe];
+      }
+    } else if (scope === 'overdue') {
+      const overdue = {
+        overallDeadline: { lt: new Date() },
+        status: { in: ['IN_EXECUTION', 'EXPIRED'] },
+        executorId: { not: null },
+      };
+      if (where.AND) {
+        (where.AND as unknown[]).push(overdue);
+      } else {
+        where.AND = [overdue];
+      }
+    } else if (scope === 'tasks') {
+      const tasksScope = {
+        executorId: { not: null },
+      };
+      if (where.AND) {
+        (where.AND as unknown[]).push(tasksScope);
+      } else {
+        where.AND = [tasksScope];
       }
     }
 
@@ -87,6 +135,11 @@ export const getDocuments = async (req: AuthRequest, res: Response): Promise<voi
         include: {
           creator: { select: { id: true, fullName: true, email: true, department: true } },
           executor: { select: { id: true, fullName: true, department: true } },
+          coExecutors: {
+            include: {
+              user: { select: { id: true, fullName: true, department: true, position: true } },
+            },
+          },
           parentDoc: { select: { id: true, docNumber: true, title: true, docType: true } },
           attachments: {
             select: { id: true, fileName: true, fileUrl: true, fileSize: true, fileType: true },
@@ -97,6 +150,7 @@ export const getDocuments = async (req: AuthRequest, res: Response): Promise<voi
               approver: { select: { id: true, fullName: true, email: true } },
             },
           },
+          dispatchedBy: { select: { id: true, fullName: true, department: true } },
           _count: { select: { history: true, attachments: true, childDocs: true } },
         },
       }),
@@ -125,6 +179,11 @@ export const getDocumentById = async (req: AuthRequest, res: Response): Promise<
       include: {
         creator: { select: { id: true, fullName: true, email: true, department: true, position: true } },
         executor: { select: { id: true, fullName: true, department: true } },
+        coExecutors: {
+          include: {
+            user: { select: { id: true, fullName: true, email: true, department: true, position: true } },
+          },
+        },
         parentDoc: {
           select: { id: true, docNumber: true, title: true, docType: true, status: true, priority: true },
         },
@@ -141,10 +200,24 @@ export const getDocumentById = async (req: AuthRequest, res: Response): Promise<
             approver: { select: { id: true, fullName: true, email: true, department: true, position: true } },
           },
         },
+        dispatchedBy: { select: { id: true, fullName: true, department: true } },
+        versions: {
+          orderBy: { versionNumber: 'desc' },
+          include: {
+            author: { select: { id: true, fullName: true, department: true, position: true } },
+          },
+        },
         history: {
           orderBy: { createdAt: 'desc' },
           include: {
             performedBy: { select: { id: true, fullName: true, email: true } },
+          },
+        },
+        tasks: {
+          orderBy: { createdAt: 'desc' },
+          include: {
+            assignee: { select: { id: true, fullName: true, department: true } },
+            creator: { select: { id: true, fullName: true } },
           },
         },
       },
@@ -155,12 +228,34 @@ export const getDocumentById = async (req: AuthRequest, res: Response): Promise<
       return;
     }
 
-    // Xavfsizlik tekshiruvi: faqat daxldor shaxslar yoki Admin ko'ra oladi
+    // Xavfsizlik tekshiruvi: faqat daxldor shaxslar, bo'lim rahbarlari yoki Admin ko'ra oladi
     const userId = req.user!.userId;
     const isAdmin = req.user!.role === 'ADMIN';
     const isCreator = document.creatorId === userId;
     const isExecutor = document.executorId === userId;
+    const isCoExecutor = (document as any).coExecutors?.some((ce: any) => ce.userId === userId);
     const isApprover = document.approvalSteps.some((step) => step.approverId === userId);
+
+    let hasManagerAccess = false;
+    if (!isAdmin && !isCreator && !isExecutor && !isCoExecutor && !isApprover) {
+      const currentUser = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { role: true, permissions: true, department: true },
+      });
+      const hasManageUsers = hasPermission(currentUser, 'USERS_MANAGE');
+      const hasAssignTask = hasPermission(currentUser, 'ASSIGN_TASK');
+      const isDeptHead = await prisma.department.findFirst({
+        where: { headUserId: userId },
+      });
+      if (hasManageUsers || hasAssignTask || !!isDeptHead) {
+        hasManagerAccess = true;
+      }
+    }
+
+    if (!isAdmin && !isCreator && !isExecutor && !isCoExecutor && !isApprover && !hasManagerAccess) {
+      sendError(res, 'Bu hujjatni ko\'rish uchun sizda ruxsat yo\'q', 403);
+      return;
+    }
 
     // Agar mas'ul ijrochi hujjatni birinchi marta ochib ko'rayotgan bo'lsa, ko'rilgan vaqtni yozib qo'yamiz
     if (isExecutor && !(document as any).executorViewedAt) {
@@ -202,6 +297,63 @@ export const getDocumentById = async (req: AuthRequest, res: Response): Promise<
   }
 };
 
+// GET /api/documents/next-number
+export const getNextDocNumber = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { deptCode, docType } = req.query;
+    const currentYear = new Date().getFullYear();
+    const rawDeptCode = (deptCode as string || '').trim();
+    const code = extractDepartmentCode(rawDeptCode) || (rawDeptCode.length <= 5 ? rawDeptCode : null);
+
+    if (code) {
+      const searchPrefix = `${code}-${currentYear}-`;
+      const count = await prisma.document.count({
+        where: {
+          docNumber: {
+            startsWith: searchPrefix,
+          },
+        },
+      });
+
+      let counter = count + 1;
+      let nextNumber = `${searchPrefix}${String(counter).padStart(4, '0')}`;
+      while (await prisma.document.findUnique({ where: { docNumber: nextNumber } })) {
+        counter++;
+        nextNumber = `${searchPrefix}${String(counter).padStart(4, '0')}`;
+      }
+
+      sendSuccess(res, { nextNumber, deptCode: code });
+      return;
+    }
+
+    let prefix = 'ICH';
+    if (docType === 'INCOMING') prefix = 'KIR';
+    else if (docType === 'OUTGOING') prefix = 'CHIQ';
+
+    const count = await prisma.document.count({
+      where: {
+        docType: (docType as string) || 'INTERNAL',
+        createdAt: {
+          gte: new Date(`${currentYear}-01-01T00:00:00.000Z`),
+          lte: new Date(`${currentYear}-12-31T23:59:59.999Z`),
+        },
+      },
+    });
+
+    let counter = count + 1;
+    let nextNumber = `${prefix}-${currentYear}-${String(counter).padStart(4, '0')}`;
+    while (await prisma.document.findUnique({ where: { docNumber: nextNumber } })) {
+      counter++;
+      nextNumber = `${prefix}-${currentYear}-${String(counter).padStart(4, '0')}`;
+    }
+
+    sendSuccess(res, { nextNumber, deptCode: null });
+  } catch (err) {
+    console.error('getNextDocNumber error:', err);
+    sendError(res, 'Xat raqamini hisoblashda xatolik', 500);
+  }
+};
+
 // POST /api/documents
 export const createDocument = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
@@ -222,6 +374,7 @@ export const createDocument = async (req: AuthRequest, res: Response): Promise<v
       overallDeadline,
       approvers, // JSON string: [{approverId, stepDeadline}, ...]
       executorId,
+      coExecutorIds,
     } = req.body;
 
     if (!title || !description) {
@@ -229,11 +382,31 @@ export const createDocument = async (req: AuthRequest, res: Response): Promise<v
       return;
     }
 
+    let parsedCoExecutorIds: number[] = [];
+    if (coExecutorIds) {
+      try {
+        const parsed = typeof coExecutorIds === 'string' ? JSON.parse(coExecutorIds) : coExecutorIds;
+        if (Array.isArray(parsed)) {
+          parsedCoExecutorIds = parsed
+            .map((id: any) => Number(id))
+            .filter((id: number) => !isNaN(id) && id > 0 && id !== Number(executorId));
+        }
+      } catch {
+        if (typeof coExecutorIds === 'string') {
+          parsedCoExecutorIds = coExecutorIds
+            .split(',')
+            .map((id: string) => Number(id.trim()))
+            .filter((id: number) => !isNaN(id) && id > 0 && id !== Number(executorId));
+        }
+      }
+    }
+    parsedCoExecutorIds = Array.from(new Set(parsedCoExecutorIds));
+
     // Validatsiya: docType
     const validDocTypes = ['INCOMING', 'OUTGOING', 'INTERNAL'];
     const normalizedDocType = validDocTypes.includes(docType) ? docType : 'INTERNAL';
 
-    let parsedApprovers: { approverId: number; stepDeadline?: string }[] = [];
+    let parsedApprovers: { approverId: number; stepDeadline?: string; stepOrder?: number }[] = [];
     if (approvers) {
       try {
         const parsed = JSON.parse(approvers);
@@ -256,19 +429,47 @@ export const createDocument = async (req: AuthRequest, res: Response): Promise<v
       }
     }
 
-    // Xat raqami: foydalanuvchi bersa - shu, bermasa - avtomatik generatsiya
+    // Xat raqami: bo'lim kodi yoki foydalanuvchi kiritgan raqam asosida generatsiya
     let docNumber: string;
-    if (manualDocNumber && String(manualDocNumber).trim()) {
-      docNumber = String(manualDocNumber).trim();
-      // Takroriy raqamni tekshirish
-      const existing = await prisma.document.findUnique({ where: { docNumber } });
-      if (existing) {
-        sendError(res, `"${docNumber}" raqami allaqachon mavjud. Boshqa raqam kiriting.`, 400);
-        return;
+    const currentYear = new Date().getFullYear();
+
+    // Bo'lim kodini aniqlash (req.body.departmentCode yoki category dan)
+    const rawDept = (req.body.departmentCode as string) || category;
+    const deptCode = extractDepartmentCode(rawDept);
+
+    if (manualDocNumber && manualDocNumber.trim()) {
+      const trimmed = manualDocNumber.trim();
+      const existing = await prisma.document.findUnique({ where: { docNumber: trimmed } });
+      if (!existing) {
+        docNumber = trimmed;
+      } else {
+        let subCounter = 1;
+        let candidate = `${trimmed}-${subCounter}`;
+        while (await prisma.document.findUnique({ where: { docNumber: candidate } })) {
+          subCounter++;
+          candidate = `${trimmed}-${subCounter}`;
+        }
+        docNumber = candidate;
       }
+    } else if (deptCode) {
+      // Tanlangan bo'lim kodi asosida unikal tartib raqam: masalan: 08-2026-0001
+      const searchPrefix = `${deptCode}-${currentYear}-`;
+      const count = await prisma.document.count({
+        where: {
+          docNumber: {
+            startsWith: searchPrefix,
+          },
+        },
+      });
+
+      let counter = count + 1;
+      let generatedNumber = `${searchPrefix}${String(counter).padStart(4, '0')}`;
+      while (await prisma.document.findUnique({ where: { docNumber: generatedNumber } })) {
+        counter++;
+        generatedNumber = `${searchPrefix}${String(counter).padStart(4, '0')}`;
+      }
+      docNumber = generatedNumber;
     } else {
-      // Avtomatik generatsiya (KIR, CHIQ, ICH)
-      const currentYear = new Date().getFullYear();
       let prefix = 'ICH';
       if (normalizedDocType === 'INCOMING') prefix = 'KIR';
       else if (normalizedDocType === 'OUTGOING') prefix = 'CHIQ';
@@ -337,6 +538,9 @@ export const createDocument = async (req: AuthRequest, res: Response): Promise<v
         overallDeadline: parseSafeDate(overallDeadline),
         creatorId: req.user!.userId,
         executorId: executorId && !isNaN(parseInt(executorId, 10)) ? parseInt(executorId, 10) : null,
+        coExecutors: parsedCoExecutorIds.length > 0 ? {
+          create: parsedCoExecutorIds.map((uId) => ({ userId: uId })),
+        } : undefined,
         ...fileData,
         // Bir nechta fayllarni DocumentAttachment jadvaliga saqlash
         attachments: uploadedFiles.length > 0 ? {
@@ -350,7 +554,7 @@ export const createDocument = async (req: AuthRequest, res: Response): Promise<v
         } : undefined,
         approvalSteps: {
           create: parsedApprovers.map((ap, index) => ({
-            stepOrder: index + 1,
+            stepOrder: ap.stepOrder ? Number(ap.stepOrder) : index + 1,
             approverId: ap.approverId,
             stepDeadline: parseSafeDate(ap.stepDeadline),
           })),
@@ -366,6 +570,11 @@ export const createDocument = async (req: AuthRequest, res: Response): Promise<v
       include: {
         creator: { select: { id: true, fullName: true, email: true, department: true } },
         executor: { select: { id: true, fullName: true, email: true, department: true } },
+        coExecutors: {
+          include: {
+            user: { select: { id: true, fullName: true, department: true, position: true } },
+          },
+        },
         parentDoc: { select: { id: true, docNumber: true, title: true, docType: true } },
         attachments: true,
         approvalSteps: {
@@ -374,37 +583,7 @@ export const createDocument = async (req: AuthRequest, res: Response): Promise<v
       },
     });
 
-    // Mas'ul ijrochiga bildirishnoma hamda Email xabarnoma yuborish
-    if (document.executorId && document.executor) {
-      try {
-        await prisma.notification.create({
-          data: {
-            userId: document.executor.id,
-            documentId: document.id,
-            type: 'APPROVAL_REQUEST',
-            title: '📥 Yangi Topshiriq',
-            message: `Sizga "${document.title}" (#${document.docNumber}) hujjati ijroga biriktirildi.`,
-            link: `/dashboard/documents/${document.id}`,
-          },
-        });
-      } catch (notifErr) {
-        console.error('Failed to create in-app notification for executor:', notifErr);
-      }
 
-      if (document.executor.email) {
-        emailService.sendTaskAssignedEmail({
-          toEmail: document.executor.email,
-          executorName: document.executor.fullName,
-          docNumber: document.docNumber,
-          docTitle: document.title,
-          deadline: document.overallDeadline
-            ? new Date(document.overallDeadline).toLocaleDateString('uz-UZ')
-            : undefined,
-          resolution: document.resolution || undefined,
-          docId: document.id,
-        }).catch((mailErr) => console.error('Failed to send task assigned email:', mailErr));
-      }
-    }
 
     sendCreated(res, document, 'Hujjat muvaffaqiyatli yaratildi');
   } catch (err: any) {
@@ -460,23 +639,36 @@ export const executeDocument = async (req: AuthRequest, res: Response): Promise<
       return;
     }
 
-    const document = await prisma.document.findUnique({ where: { id: docId } });
+    const document = await prisma.document.findUnique({
+      where: { id: docId },
+      include: { coExecutors: true },
+    });
 
     if (!document) {
       sendError(res, 'Hujjat topilmadi', 404);
       return;
     }
 
-    // Faqat belgilangan ijrochi (yoki hujjat egasi) yoki Admin ijro qila oladi
-    if (
-      (document.executorId && document.executorId !== req.user!.userId && req.user!.role !== 'ADMIN') ||
-      (!document.executorId && document.creatorId !== req.user!.userId && req.user!.role !== 'ADMIN')
-    ) {
+    const userId = req.user!.userId;
+    const isAdmin = req.user!.role === 'ADMIN';
+    const isMainExecutor = document.executorId === userId;
+    const isCoExecutor = document.coExecutors?.some((ce) => ce.userId === userId);
+    const isCreatorWithoutExecutor = !document.executorId && document.creatorId === userId;
+
+    // Faqat mas'ul ijrochi, ham-ijrochilar (yoki ijrochisi yo'q bo'lsa yaratuvchi) yoki Admin ijro qila oladi
+    if (!isMainExecutor && !isCoExecutor && !isCreatorWithoutExecutor && !isAdmin) {
       sendError(res, 'Bu amalni bajarishga ruxsat yo\'q', 403);
       return;
     }
 
-    if (document.status !== 'IN_EXECUTION') {
+    // EXPIRED holat: muddat o'tgan bo'lsa ham ijrochi ijroni yakunlay olishi kerak
+    if (document.status === 'EXPIRED') {
+      // Avval IN_EXECUTION ga qaytaramiz, so'ng workflowService yakunlaydi
+      await prisma.document.update({
+        where: { id: docId },
+        data: { status: 'IN_EXECUTION' },
+      });
+    } else if (document.status !== 'IN_EXECUTION') {
       sendError(res, 'Faqat ijroda bo\'lgan hujjatni yakunlash mumkin', 400);
       return;
     }
@@ -604,8 +796,8 @@ export const closeDocument = async (req: AuthRequest, res: Response): Promise<vo
       return;
     }
 
-    if (!['IN_EXECUTION', 'APPROVED'].includes(document.status)) {
-      sendError(res, 'Faqat ijroda yoki tasdiqlangan hujjatni yopish mumkin', 400);
+    if (!['IN_EXECUTION', 'APPROVED', 'EXPIRED'].includes(document.status)) {
+      sendError(res, 'Faqat ijroda, tasdiqlangan yoki muddati o\'tgan hujjatni yopish mumkin', 400);
       return;
     }
 
@@ -651,6 +843,8 @@ export const updateDocument = async (req: AuthRequest, res: Response): Promise<v
       parentDocId,
       overallDeadline,
       approvers,
+      executorId,
+      coExecutorIds,
     } = req.body;
 
     const document = await prisma.document.findUnique({ where: { id: docId } });
@@ -665,9 +859,36 @@ export const updateDocument = async (req: AuthRequest, res: Response): Promise<v
       return;
     }
 
-    if (document.status !== 'DRAFT') {
-      sendError(res, 'Faqat qoralama hujjatni tahrirlash mumkin', 400);
+    if (!['DRAFT', 'RETURNED_FOR_REVISION'].includes(document.status)) {
+      sendError(res, 'Faqat qoralama yoki qayta ishlashga qaytarilgan hujjatni tahrirlash mumkin', 400);
       return;
+    }
+
+    // Ham-ijrochilarni yangilash
+    if (coExecutorIds !== undefined) {
+      let parsedCoExecs: number[] = [];
+      try {
+        const parsed = typeof coExecutorIds === 'string' ? JSON.parse(coExecutorIds) : coExecutorIds;
+        if (Array.isArray(parsed)) {
+          parsedCoExecs = parsed
+            .map((id: any) => Number(id))
+            .filter((id: number) => !isNaN(id) && id > 0 && id !== Number(executorId !== undefined ? executorId : document.executorId));
+        }
+      } catch {
+        if (typeof coExecutorIds === 'string') {
+          parsedCoExecs = coExecutorIds
+            .split(',')
+            .map((id: string) => Number(id.trim()))
+            .filter((id: number) => !isNaN(id) && id > 0 && id !== Number(executorId !== undefined ? executorId : document.executorId));
+        }
+      }
+      parsedCoExecs = Array.from(new Set(parsedCoExecs));
+      await prisma.documentCoExecutor.deleteMany({ where: { documentId: docId } });
+      if (parsedCoExecs.length > 0) {
+        await prisma.documentCoExecutor.createMany({
+          data: parsedCoExecs.map((uId) => ({ documentId: docId, userId: uId })),
+        });
+      }
     }
 
     // Fayllarni ajratish (duplikat bo'lmasligi uchun ustuvorlik tekshiriladi)
@@ -695,7 +916,7 @@ export const updateDocument = async (req: AuthRequest, res: Response): Promise<v
     // Agar yangi approverlar bo'lsa eski bosqichlarni o'chirib qayta yaratamiz
     let approvalUpdate = {};
     if (approvers) {
-      let parsedApprovers: { approverId: number; stepDeadline?: string }[];
+      let parsedApprovers: { approverId: number; stepDeadline?: string; stepOrder?: number }[];
       try { parsedApprovers = JSON.parse(approvers); } catch { parsedApprovers = []; }
 
       if (parsedApprovers.length > 0) {
@@ -703,13 +924,40 @@ export const updateDocument = async (req: AuthRequest, res: Response): Promise<v
         approvalUpdate = {
           approvalSteps: {
             create: parsedApprovers.map((ap, index) => ({
-              stepOrder: index + 1,
+              stepOrder: ap.stepOrder ? Number(ap.stepOrder) : index + 1,
               approverId: ap.approverId,
               stepDeadline: ap.stepDeadline ? new Date(ap.stepDeadline) : undefined,
             })),
           },
         };
       }
+    }
+
+    const { changeNote } = req.body;
+
+    // Versiyani arxivlash (Snapshot previous version)
+    const shouldSnapshotVersion =
+      document.status === 'RETURNED_FOR_REVISION' ||
+      (title && title !== document.title) ||
+      (description && description !== document.description) ||
+      uploadedFiles.length > 0;
+
+    if (shouldSnapshotVersion) {
+      const currentAtts = await prisma.documentAttachment.findMany({ where: { documentId: docId } });
+      await prisma.documentVersion.create({
+        data: {
+          documentId: docId,
+          versionNumber: document.currentVersion,
+          title: document.title,
+          description: document.description,
+          fileUrl: document.fileUrl,
+          fileName: document.fileName,
+          fileSize: document.fileSize,
+          attachmentsSnapshot: JSON.stringify(currentAtts),
+          changeNote: changeNote || (document.status === 'RETURNED_FOR_REVISION' ? 'Qayta ishlashdan so\'ng yangilandi' : 'Hujjat tahrirlandi'),
+          authorId: req.user!.userId,
+        },
+      });
     }
 
     const validDocTypes = ['INCOMING', 'OUTGOING', 'INTERNAL'];
@@ -721,6 +969,7 @@ export const updateDocument = async (req: AuthRequest, res: Response): Promise<v
         ...(title && { title }),
         ...(description && { description }),
         ...(category && { category }),
+        ...(shouldSnapshotVersion && { currentVersion: { increment: 1 } }),
         ...(priority && { priority }),
         ...(normalizedDocType && { docType: normalizedDocType }),
         ...(senderOrg !== undefined && { senderOrg: senderOrg || null }),
@@ -731,6 +980,7 @@ export const updateDocument = async (req: AuthRequest, res: Response): Promise<v
         ...(deliveryMethod !== undefined && { deliveryMethod: deliveryMethod || null }),
         ...(parentDocId !== undefined && { parentDocId: parentDocId ? parseInt(parentDocId) : null }),
         ...(overallDeadline !== undefined && { overallDeadline: overallDeadline ? new Date(overallDeadline) : null }),
+        ...(executorId !== undefined && { executorId: executorId && !isNaN(parseInt(executorId, 10)) ? parseInt(executorId, 10) : null }),
         ...fileData,
         ...(uploadedFiles.length > 0 && {
           attachments: {
@@ -746,13 +996,22 @@ export const updateDocument = async (req: AuthRequest, res: Response): Promise<v
         ...approvalUpdate,
         history: {
           create: {
-            actionName: 'UPDATED',
-            description: 'Hujjat tahrirlandi',
+            actionName: shouldSnapshotVersion ? 'VERSION_CREATED' : 'UPDATED',
+            description: shouldSnapshotVersion
+              ? `Hujjat tahrirlandi va yangi versiya (v${document.currentVersion + 1}) yaratildi`
+              : 'Hujjat tahrirlandi',
             performedById: req.user!.userId,
           },
         },
       },
       include: {
+        creator: { select: { id: true, fullName: true, email: true, department: true } },
+        executor: { select: { id: true, fullName: true, department: true } },
+        coExecutors: {
+          include: {
+            user: { select: { id: true, fullName: true, department: true, position: true } },
+          },
+        },
         attachments: true,
         parentDoc: { select: { id: true, docNumber: true, title: true, docType: true } },
         approvalSteps: {
@@ -789,8 +1048,8 @@ export const resubmitDocument = async (req: AuthRequest, res: Response): Promise
       return;
     }
 
-    if (document.status !== 'REJECTED') {
-      sendError(res, 'Faqat rad etilgan hujjatni qayta yuborish mumkin', 400);
+    if (document.status !== 'REJECTED' && document.status !== 'RETURNED_FOR_REVISION') {
+      sendError(res, 'Faqat rad etilgan yoki qayta ishlashga qaytarilgan hujjatni qayta yuborish mumkin', 400);
       return;
     }
 
@@ -815,7 +1074,9 @@ export const resubmitDocument = async (req: AuthRequest, res: Response): Promise
             actionName: hasNoApprovers ? 'DIRECT_EXECUTION' : 'RESUBMITTED',
             description: hasNoApprovers
               ? 'Hujjat qayta topshirildi va to\'g\'ridan-to\'g\'ri ijroga yo\'naltirildi'
-              : 'Hujjat rad etilgandan so\'ng qayta tasdiqlashga yuborildi',
+              : (document.status === 'RETURNED_FOR_REVISION'
+                  ? 'Hujjat kamchiliklar to\'g\'rilangach qayta tasdiqlashga yuborildi'
+                  : 'Hujjat rad etilgandan so\'ng qayta tasdiqlashga yuborildi'),
             performedById: req.user!.userId,
           },
         },
@@ -986,6 +1247,71 @@ export const getDocumentStats = async (req: AuthRequest, res: Response): Promise
   } catch (err) {
     console.error(err);
     sendError(res, 'Server xatosi', 500);
+  }
+};
+
+// GET /api/documents/tasks/stats
+export const getTaskStats = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const userId = req.user!.userId;
+    const now = new Date();
+
+    const assignedToMeBase = {
+      OR: [
+        { executorId: userId },
+        { coExecutors: { some: { userId } } },
+      ],
+      executorId: { not: null },
+    };
+
+    const assignedByMeBase = {
+      creatorId: userId,
+      executorId: { not: null },
+    };
+
+    const [
+      assignedToMeTotal,
+      assignedToMePending,
+      assignedToMeCompleted,
+      assignedToMeOverdue,
+      assignedByMeTotal,
+      assignedByMePending,
+      assignedByMeCompleted,
+      allTasksTotal,
+    ] = await Promise.all([
+      prisma.document.count({ where: assignedToMeBase }),
+      prisma.document.count({ where: { ...assignedToMeBase, status: 'IN_EXECUTION' } }),
+      prisma.document.count({ where: { ...assignedToMeBase, status: 'COMPLETED' } }),
+      prisma.document.count({
+        where: {
+          ...assignedToMeBase,
+          status: { in: ['IN_EXECUTION', 'EXPIRED'] },
+          overallDeadline: { lt: now },
+        },
+      }),
+      prisma.document.count({ where: assignedByMeBase }),
+      prisma.document.count({ where: { ...assignedByMeBase, status: 'IN_EXECUTION' } }),
+      prisma.document.count({ where: { ...assignedByMeBase, status: 'COMPLETED' } }),
+      prisma.document.count({ where: { executorId: { not: null } } }),
+    ]);
+
+    sendSuccess(
+      res,
+      {
+        assignedToMeTotal,
+        assignedToMePending,
+        assignedToMeCompleted,
+        assignedToMeOverdue,
+        assignedByMeTotal,
+        assignedByMePending,
+        assignedByMeCompleted,
+        allTasksTotal,
+      },
+      'Topshiriqlar statistikasi'
+    );
+  } catch (err) {
+    console.error('getTaskStats error:', err);
+    sendError(res, 'Topshiriqlar statistikasini olishda xatolik yuz berdi', 500);
   }
 };
 
@@ -1169,4 +1495,361 @@ export const viewDocumentAttachment = async (req: AuthRequest, res: Response): P
     sendError(res, 'Server xatosi', 500);
   }
 };
+
+// POST /api/documents/:id/dispatch
+export const dispatchDocument = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const docId = parseInt(req.params.id, 10);
+    const { recipientEmail, subject, note, sendAttachments } = req.body;
+
+    if (!recipientEmail || !recipientEmail.includes('@')) {
+      sendError(res, "Qabul qiluvchining to'g'ri elektron pochta manzili kiritilishi shart", 400);
+      return;
+    }
+
+    const doc = await prisma.document.findUnique({
+      where: { id: docId },
+      include: {
+        creator: true,
+        executor: true,
+        attachments: true,
+      },
+    });
+
+    if (!doc) {
+      sendError(res, 'Hujjat topilmadi', 404);
+      return;
+    }
+
+    if (doc.docType !== 'OUTGOING') {
+      sendError(res, "Faqat Chiquvchi xatlarni tashqi manzilga jo'natish mumkin", 400);
+      return;
+    }
+
+    if (doc.status !== 'APPROVED' && doc.status !== 'COMPLETED') {
+      sendError(res, "Faqat to'liq tasdiqlangan hujjatlarni jo'natish mumkin", 400);
+      return;
+    }
+
+    const dispatcher = await prisma.user.findUnique({
+      where: { id: req.user!.userId },
+      select: { fullName: true, department: true },
+    });
+
+    // Biriktirilgan fayllarni tayyorlash
+    const mailAttachments: { filename: string; path: string }[] = [];
+    if (sendAttachments !== false && doc.attachments.length > 0) {
+      for (const att of doc.attachments) {
+        const localPath = path.join(process.cwd(), att.fileUrl.startsWith('/') ? att.fileUrl.slice(1) : att.fileUrl);
+        if (fs.existsSync(localPath)) {
+          mailAttachments.push({
+            filename: att.fileName,
+            path: localPath,
+          });
+        }
+      }
+    }
+
+    // Email orqali xatni jo'natish
+    await emailService.sendOutgoingDispatchEmail({
+      toEmail: recipientEmail.trim(),
+      docNumber: doc.docNumber,
+      docTitle: subject || doc.title,
+      recipientOrg: doc.recipientOrg || undefined,
+      senderName: dispatcher ? `${dispatcher.fullName}${dispatcher.department ? ' (' + dispatcher.department + ')' : ''}` : 'Discover Invest',
+      dispatchNote: note || undefined,
+      attachments: mailAttachments.length > 0 ? mailAttachments : undefined,
+    });
+
+    // Hujjatni yangilash
+    const updatedDoc = await prisma.document.update({
+      where: { id: docId },
+      data: {
+        isDispatched: true,
+        dispatchedAt: new Date(),
+        dispatchedToEmail: recipientEmail.trim(),
+        dispatchSubject: subject || doc.title,
+        dispatchNote: note || null,
+        dispatchedById: req.user!.userId,
+        status: 'COMPLETED',
+        completedAt: doc.completedAt || new Date(),
+      },
+      include: {
+        dispatchedBy: { select: { id: true, fullName: true, department: true } },
+      },
+    });
+
+    // Audit log
+    await prisma.taskHistory.create({
+      data: {
+        documentId: docId,
+        actionName: 'DISPATCHED',
+        description: `Chiquvchi xat rasmiy tarzda jo'natildi: ${recipientEmail.trim()}${doc.recipientOrg ? ` (${doc.recipientOrg})` : ''}`,
+        performedById: req.user!.userId,
+      },
+    });
+
+    // Yaratuvchi va ijrochilarga bildirishnoma
+    const recipientsToNotify = Array.from(new Set([doc.creatorId, doc.executorId].filter(Boolean))) as number[];
+    for (const uId of recipientsToNotify) {
+      const notif = await prisma.notification.create({
+        data: {
+          userId: uId,
+          documentId: docId,
+          type: 'DISPATCHED',
+          title: `📤 Chiquvchi xat jo'natildi`,
+          message: `"${doc.title}" (${doc.docNumber}) xati ${recipientEmail.trim()} manziliga muvaffaqiyatli jo'natildi.`,
+          link: `/dashboard/documents/${docId}`,
+        },
+      });
+      try {
+        const { sendSocketNotification } = require('../server');
+        sendSocketNotification(uId, notif);
+      } catch {}
+    }
+
+    sendSuccess(res, updatedDoc, "Chiquvchi xat muvaffaqiyatli jo'natildi");
+  } catch (err) {
+    console.error('Dispatch error:', err);
+    sendError(res, "Xatni jo'natishda xatolik yuz berdi", 500);
+  }
+};
+
+// GET /api/documents/:id/versions
+export const getDocumentVersions = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const docId = parseInt(req.params.id, 10);
+    const doc = await prisma.document.findUnique({
+      where: { id: docId },
+      select: { id: true, currentVersion: true, title: true, docNumber: true },
+    });
+
+    if (!doc) {
+      sendError(res, 'Hujjat topilmadi', 404);
+      return;
+    }
+
+    const versions = await prisma.documentVersion.findMany({
+      where: { documentId: docId },
+      orderBy: { versionNumber: 'desc' },
+      include: {
+        author: {
+          select: { id: true, fullName: true, email: true, department: true, position: true, avatar: true },
+        },
+      },
+    });
+
+    sendSuccess(res, versions, 'Hujjat versiyalari olindi');
+  } catch (err) {
+    console.error('getDocumentVersions error:', err);
+    sendError(res, 'Versiyalarni yuklashda xatolik', 500);
+  }
+};
+
+// POST /api/documents/:id/assign-executor
+export const assignExecutorToDocument = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const docId = parseInt(req.params.id, 10);
+    const { executorId, coExecutorIds, overallDeadline, resolution } = req.body;
+
+    if (!executorId || isNaN(Number(executorId))) {
+      sendError(res, 'Mas\'ul xodim (ijrochi) tanlanishi shart', 400);
+      return;
+    }
+
+    const doc = await prisma.document.findUnique({
+      where: { id: docId },
+      include: {
+        creator: true,
+        executor: true,
+      },
+    });
+
+    if (!doc) {
+      sendError(res, 'Hujjat topilmadi', 404);
+      return;
+    }
+
+    // Ruxsat tekshiruvi:
+    // 1. ADMIN
+    // 2. USERS_MANAGE huquqi bor xodim (xodimlarni boshqara oluvchi bo'lim rahbari)
+    // 3. ASSIGN_TASK huquqi bor xodim
+    // 4. Hujjatning joriy mas'ul ijrochisi (masalan, o'ziga yo'naltirilgan xatni xodimiga topshirayotgan bo'lim boshlig'i)
+    // 5. Hujjat yaratuvchisi / muallifi
+    // 6. Biror bo'lim boshlig'i (Department.headUserId)
+    const currentUser = await prisma.user.findUnique({
+      where: { id: req.user!.userId },
+      select: { id: true, role: true, permissions: true, department: true, departmentId: true },
+    });
+
+    const isOwner = doc.creatorId === req.user!.userId;
+    const isCurrentExecutor = doc.executorId === req.user!.userId;
+    const hasManageUsers = hasPermission(currentUser, 'USERS_MANAGE');
+    const hasAssignTask = hasPermission(currentUser, 'ASSIGN_TASK');
+    const isDeptHead = await prisma.department.findFirst({
+      where: { headUserId: req.user!.userId },
+    });
+
+    const canAssign =
+      req.user!.role === 'ADMIN' ||
+      isOwner ||
+      isCurrentExecutor ||
+      hasManageUsers ||
+      hasAssignTask ||
+      !!isDeptHead;
+
+    if (!canAssign) {
+      sendError(res, 'Sizda hujjatni xodimga yo\'naltirish / topshiriq berish huquqi mavjud emas', 403);
+      return;
+    }
+
+    const assignedExecutor = await prisma.user.findUnique({
+      where: { id: Number(executorId) },
+      select: { id: true, fullName: true, email: true, department: true },
+    });
+
+    if (!assignedExecutor) {
+      sendError(res, 'Tayinlanayotgan xodim topilmadi', 404);
+      return;
+    }
+
+    const assigner = await prisma.user.findUnique({
+      where: { id: req.user!.userId },
+      select: { id: true, fullName: true, department: true, position: true },
+    });
+
+    // Ham-ijrochilar
+    let parsedCoExecs: number[] = [];
+    if (coExecutorIds) {
+      if (Array.isArray(coExecutorIds)) {
+        parsedCoExecs = coExecutorIds.map(Number).filter((n) => !isNaN(n) && n > 0 && n !== Number(executorId));
+      } else if (typeof coExecutorIds === 'string') {
+        try {
+          const parsed = JSON.parse(coExecutorIds);
+          if (Array.isArray(parsed)) parsedCoExecs = parsed.map(Number).filter((n) => !isNaN(n) && n > 0 && n !== Number(executorId));
+        } catch {
+          parsedCoExecs = coExecutorIds.split(',').map((s: string) => Number(s.trim())).filter((n: number) => !isNaN(n) && n > 0 && n !== Number(executorId));
+        }
+      }
+      parsedCoExecs = Array.from(new Set(parsedCoExecs));
+    }
+
+    await prisma.documentCoExecutor.deleteMany({ where: { documentId: docId } });
+
+    // Hujjat holatini yangilash
+    const shouldAdvanceToExecution = ['DRAFT', 'INCOMING_PENDING', 'APPROVED'].includes(doc.status);
+    const cleanDeadline = parseSafeDate(overallDeadline) || doc.overallDeadline || undefined;
+
+    const updatedDoc = await prisma.document.update({
+      where: { id: docId },
+      data: {
+        executorId: Number(executorId),
+        resolution: resolution !== undefined ? (resolution ? resolution.trim() : null) : undefined,
+        overallDeadline: cleanDeadline,
+        ...(shouldAdvanceToExecution && {
+          status: 'IN_EXECUTION',
+          submittedAt: doc.submittedAt || new Date(),
+        }),
+        ...(parsedCoExecs.length > 0 && {
+          coExecutors: {
+            create: parsedCoExecs.map((uId) => ({ userId: uId })),
+          },
+        }),
+      },
+      include: {
+        creator: { select: { id: true, fullName: true, department: true } },
+        executor: { select: { id: true, fullName: true, department: true } },
+        coExecutors: { include: { user: { select: { id: true, fullName: true, department: true } } } },
+        tasks: {
+          include: {
+            assignee: { select: { id: true, fullName: true } },
+          },
+        },
+      },
+    });
+
+    // Mustaqil Task (Topshiriq) moduliga ham avtomatik kiritish
+    const year = new Date().getFullYear();
+    const taskCount = await prisma.task.count();
+    const taskNumber = `TOP-${year}-${String(taskCount + 1).padStart(4, '0')}`;
+
+    const taskDescription = resolution
+      ? `Rahbar ko'rsatmasi: ${resolution.trim()}\n\nHujjat mazmuni: ${doc.description}`
+      : doc.description;
+
+    await prisma.task.create({
+      data: {
+        taskNumber,
+        title: doc.title,
+        description: taskDescription,
+        priority: doc.priority,
+        status: 'NEW',
+        deadline: cleanDeadline,
+        creatorId: req.user!.userId,
+        assigneeId: Number(executorId),
+        documentId: docId,
+        ...(parsedCoExecs.length > 0 && {
+          coAssignees: {
+            create: parsedCoExecs.map((uId) => ({ userId: uId })),
+          },
+        }),
+        activities: {
+          create: {
+            action: 'CREATED',
+            description: `Topshiriq "${doc.docNumber}" hujjati asosida ${assigner?.fullName || 'Bo\'lim rahbari'} tomonidan yo'naltirildi`,
+            performedById: req.user!.userId,
+          },
+        },
+      },
+    });
+
+    // Audit log
+    await prisma.taskHistory.create({
+      data: {
+        documentId: docId,
+        actionName: 'DIRECT_TASK_ASSIGNED',
+        description: `Bo'lim rahbari (${assigner?.fullName || 'Rahbar'}) hujjatni ijro uchun xodim ${assignedExecutor.fullName}ga yo'naltirdi [${taskNumber}]${resolution ? ' — Ko\'rsatma: ' + resolution : ''}`,
+        performedById: req.user!.userId,
+      },
+    });
+
+    // Ijrochiga bildirishnoma
+    const notif = await prisma.notification.create({
+      data: {
+        userId: Number(executorId),
+        documentId: docId,
+        type: 'APPROVAL_REQUEST',
+        title: 'Sizga yangi topshiriq yo\'naltirildi! 📋',
+        message: `"${doc.title}" (${doc.docNumber}) hujjati ijro etishingiz uchun yo'naltirildi. Topshiriq: ${taskNumber}. Mas'ul rahbar: ${assigner?.fullName || 'Rahbariyat'}`,
+        link: `/dashboard/documents/${docId}`,
+      },
+    });
+
+    try {
+      const { sendSocketNotification } = require('../server');
+      sendSocketNotification(Number(executorId), notif);
+    } catch {}
+
+    // Email orqali xabarnoma
+    if (assignedExecutor.email) {
+      emailService.sendTaskAssignedEmail({
+        toEmail: assignedExecutor.email,
+        executorName: assignedExecutor.fullName,
+        docNumber: doc.docNumber,
+        docTitle: doc.title,
+        deadline: overallDeadline ? new Date(overallDeadline).toLocaleDateString('uz-UZ') : undefined,
+        resolution: resolution || undefined,
+        docId: doc.id,
+      }).catch((err: any) => console.error('sendTaskAssignedEmail error:', err));
+    }
+
+    sendSuccess(res, updatedDoc, `Hujjat ${assignedExecutor.fullName}ga muvaffaqiyatli yo'naltirildi (Topshiriq raqami: ${taskNumber})`);
+  } catch (err) {
+    console.error('assignExecutorToDocument error:', err);
+    sendError(res, 'Topshiriq biriktirishda xatolik', 500);
+  }
+};
+
+
+
 

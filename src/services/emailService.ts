@@ -29,35 +29,35 @@ class EmailService {
   /**
    * General email sending function
    */
-  async sendEmail(options: { to: string; subject: string; html: string; text?: string }) {
+  async sendEmail(options: { to: string; subject: string; html: string; text?: string; attachments?: any[] }) {
     const { smtpHost, smtpPort, smtpSecure, smtpUser, smtpPass } = config.email;
     const sender = smtpUser || 'info@di.uz';
 
     const configsToTry = [
-      // 1. Internal configured mail server (10.1.1.122 port 587 with auth if provided)
+      // 1. Internal mail server Port 25 (Exchange IP Relay - fast & no auth needed for internal domain)
       {
-        host: smtpHost || '10.1.1.122',
-        port: smtpPort || 587,
-        secure: smtpSecure,
-        auth: smtpUser && smtpPass ? { user: smtpUser, pass: smtpPass } : undefined,
-      },
-      // 2. Internal mail server Port 25 (IP Relay without auth)
-      {
-        host: smtpHost || '10.1.1.122',
+        host: '10.1.1.122',
         port: 25,
         secure: false,
         auth: undefined,
       },
-      // 3. Internal mail server Port 587 (without auth fallback)
-      {
-        host: smtpHost || '10.1.1.122',
-        port: 587,
-        secure: false,
-        auth: undefined,
-      },
-      // 4. External Office 365 fallback if credentials exist
+      // 2. Custom host from env if different from 10.1.1.122
+      ...(smtpHost && smtpHost !== '10.1.1.122' ? [
+        {
+          host: smtpHost,
+          port: smtpPort || 25,
+          secure: smtpSecure,
+          auth: smtpUser && smtpPass ? { user: smtpUser, pass: smtpPass } : undefined,
+        }
+      ] : []),
+      // 3. Port 587 with credentials if configured
       ...(smtpUser && smtpPass ? [
-        { host: 'smtp.office365.com', port: 587, secure: false, auth: { user: smtpUser, pass: smtpPass } },
+        {
+          host: smtpHost || '10.1.1.122',
+          port: 587,
+          secure: false,
+          auth: { user: smtpUser, pass: smtpPass },
+        }
       ] : []),
     ];
 
@@ -77,6 +77,7 @@ class EmailService {
           subject: options.subject,
           html: options.html,
           text: options.text || options.subject,
+          attachments: options.attachments,
         });
 
         console.log(`✉️ [EmailService] Email sent successfully via ${cfg.host}:${cfg.port} to ${options.to}: ${info.messageId}`);
@@ -161,6 +162,137 @@ class EmailService {
       html,
     });
   }
+
+  /**
+   * Notification email sent to an approver for a pending approval stage
+   */
+  async sendApprovalRequestEmail(options: {
+    toEmail: string;
+    approverName: string;
+    docNumber: string;
+    docTitle: string;
+    creatorName: string;
+    docId: number;
+    deadline?: string;
+  }) {
+    const docUrl = `${config.frontendUrl}/dashboard/documents/${options.docId}`;
+    const html = `
+      <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f6f9; padding: 30px; color: #1e293b;">
+        <div style="max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.08);">
+          <div style="background: linear-gradient(135deg, #d97706, #b45309); padding: 24px; text-align: center; color: white;">
+            <h2 style="margin: 0; font-size: 22px; font-weight: 700;">⏳ Yangi Tasdiqlash So'rovi</h2>
+            <p style="margin: 6px 0 0 0; opacity: 0.9; font-size: 14px;">BPM Tizimi Bildirishnomasi</p>
+          </div>
+          <div style="padding: 24px; line-height: 1.6;">
+            <p style="font-size: 16px; margin-top: 0;">Hurmatli <strong>${options.approverName}</strong>,</p>
+            <p style="font-size: 14px; color: #475569;">
+              Sizga <strong>${options.creatorName}</strong> tomonidan yaratilgan yangi hujjat tasdiqlashingiz uchun yuborildi:
+            </p>
+            <div style="background: #f8fafc; border-left: 4px solid #d97706; border-radius: 6px; padding: 16px; margin: 20px 0;">
+              <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+                <tr>
+                  <td style="padding: 6px 0; color: #64748b; width: 140px;">Hujjat Raqami:</td>
+                  <td style="padding: 6px 0; font-weight: 600; color: #0f172a;">${options.docNumber}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 6px 0; color: #64748b;">Hujjat Nomi:</td>
+                  <td style="padding: 6px 0; font-weight: 600; color: #0f172a;">${options.docTitle}</td>
+                </tr>
+                ${options.deadline ? `
+                <tr>
+                  <td style="padding: 6px 0; color: #64748b;">Tasdiqlash muddati:</td>
+                  <td style="padding: 6px 0; font-weight: 600; color: #dc2626;">${options.deadline}</td>
+                </tr>` : ''}
+              </table>
+            </div>
+            <div style="text-align: center; margin-top: 30px;">
+              <a href="${docUrl}" style="background-color: #d97706; color: white; text-decoration: none; padding: 12px 28px; border-radius: 8px; font-weight: 600; font-size: 14px; display: inline-block; box-shadow: 0 2px 6px rgba(217,119,6,0.3);">
+                Hujjatni Ko'rib Chiqish va Tasdiqlash
+              </a>
+            </div>
+          </div>
+          <div style="background: #f1f5f9; padding: 16px; text-align: center; font-size: 12px; color: #94a3b8; border-top: 1px solid #e2e8f0;">
+            Bu avtomatik yuborilgan bildirishnoma. Iltimos, ushbu xatga javob bermang.
+          </div>
+        </div>
+      </div>
+    `;
+
+    return this.sendEmail({
+      to: options.toEmail,
+      subject: `[BPM] Tasdiqlashingiz kutilmoqda: ${options.docTitle} (${options.docNumber})`,
+      html,
+    });
+  }
+
+  /**
+   * Official outbound document dispatch email sent to external recipient organization
+   */
+  async sendOutgoingDispatchEmail(options: {
+    toEmail: string;
+    docNumber: string;
+    docTitle: string;
+    recipientOrg?: string;
+    senderName: string;
+    dispatchNote?: string;
+    attachments?: { filename: string; path: string }[];
+  }) {
+    const html = `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 650px; margin: 0 auto; background-color: #f8fafc; padding: 24px;">
+        <div style="background-color: #ffffff; border-radius: 12px; overflow: hidden; border: 1px solid #e2e8f0; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
+          <div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 28px 24px; text-align: center; border-bottom: 3px solid #d97706;">
+            <h1 style="color: #ffffff; margin: 0; font-size: 22px; font-weight: 700; letter-spacing: 0.5px;">DISCOVER INVEST</h1>
+            <p style="color: #cbd5e1; margin: 6px 0 0 0; font-size: 13px; text-transform: uppercase; letter-spacing: 1px;">Elektron Hujjat Aylanishi — Rasmiy Xat</p>
+          </div>
+          <div style="padding: 32px 28px;">
+            <p style="font-size: 15px; color: #334155; margin-top: 0; line-height: 1.6;">
+              Hurmatli hamkor${options.recipientOrg ? ` (<b>${options.recipientOrg}</b>)` : ''},
+            </p>
+            <p style="font-size: 14px; color: #475569; line-height: 1.6;">
+              "Discover Invest" kompaniyasidan rasmiy chiquvchi xat yuborilmoqda. Hujjat to'liq tasdiqlangan va ilovalar biriktirilgan.
+            </p>
+            
+            <div style="background-color: #f1f5f9; border-left: 4px solid #d97706; padding: 18px 20px; border-radius: 0 8px 8px 0; margin: 24px 0;">
+              <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+                <tr>
+                  <td style="padding: 6px 0; color: #64748b; width: 140px;">Xat raqami:</td>
+                  <td style="padding: 6px 0; font-weight: 700; color: #0f172a;">${options.docNumber}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 6px 0; color: #64748b;">Mavzu:</td>
+                  <td style="padding: 6px 0; font-weight: 600; color: #0f172a;">${options.docTitle}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 6px 0; color: #64748b;">Jo'natuvchi:</td>
+                  <td style="padding: 6px 0; font-weight: 600; color: #0f172a;">${options.senderName} ("Discover Invest")</td>
+                </tr>
+                ${options.dispatchNote ? `
+                <tr>
+                  <td style="padding: 6px 0; color: #64748b; vertical-align: top;">Ilova/Izoh:</td>
+                  <td style="padding: 6px 0; color: #334155; line-height: 1.5;">${options.dispatchNote}</td>
+                </tr>` : ''}
+              </table>
+            </div>
+
+            <p style="font-size: 13px; color: #64748b; margin-bottom: 0;">
+              Ushbu xatga tegishli hujjatlar va fayllar xat ilovasi sifatida biriktirilgan.
+            </p>
+          </div>
+          <div style="background: #f1f5f9; padding: 16px; text-align: center; font-size: 12px; color: #94a3b8; border-top: 1px solid #e2e8f0;">
+            © ${new Date().getFullYear()} "Discover Invest" MCHJ. Barcha huquqlar himoyalangan.
+          </div>
+        </div>
+      </div>
+    `;
+
+    return this.sendEmail({
+      to: options.toEmail,
+      subject: `[Discover Invest] Rasmiy xat: ${options.docNumber} — ${options.docTitle}`,
+      html,
+      attachments: options.attachments,
+    });
+  }
 }
 
 export const emailService = new EmailService();
+

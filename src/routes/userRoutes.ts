@@ -9,18 +9,18 @@ import {
   getApprovers,
 } from '../controllers/userController';
 import { authenticate } from '../middleware/auth';
-import { requireAdmin } from '../middleware/roleGuard';
+import { requireAdmin, requireAdminOrPermission } from '../middleware/roleGuard';
 
 const router = Router();
 
 router.use(authenticate);
 
 router.get('/approvers', getApprovers);
-router.get('/', requireAdmin, getUsers);
+router.get('/', getUsers);
 router.get('/:id', getUserById);
-router.post('/', requireAdmin, createUser);
-router.patch('/:id/password', requireAdmin, resetUserPassword);
-router.patch('/:id', requireAdmin, updateUser);
-router.delete('/:id', requireAdmin, deleteUser);
+router.post('/', requireAdminOrPermission('USERS_MANAGE'), createUser);
+router.patch('/:id/password', requireAdminOrPermission('USERS_MANAGE'), resetUserPassword);
+router.patch('/:id', requireAdminOrPermission('USERS_MANAGE'), updateUser);
+router.delete('/:id', requireAdminOrPermission('USERS_MANAGE'), deleteUser);
 
 export default router;

@@ -3,61 +3,120 @@ import { prisma } from '../utils/prisma';
 import { sendSuccess, sendError } from '../utils/apiResponse';
 import { AuthRequest } from '../middleware/auth';
 
-// KPI hisoblash yordamchi funksiyasi
+// KPI hisoblash yordamchi funksiyasi (4 xil Svetofor mantiqi asosida)
 async function calcKpiForUser(userId: number) {
   const createdDocs = await prisma.document.count({ where: { creatorId: userId } });
   const rejectedDocsAsCreator = await prisma.document.count({
     where: { creatorId: userId, status: 'REJECTED' }
   });
 
+  const now = Date.now();
+
+  // 1. Tasdiqlovchi (Approver) ko'rsatkichlari
   const approvalSteps = await prisma.approvalStep.findMany({
-    where: { approverId: userId, stepStatus: { not: 'PENDING' } },
+    where: { approverId: userId },
     select: { stepStatus: true, stepDeadline: true, actionDate: true }
   });
 
-  let onTimeApprovals = 0;
-  let lateApprovals = 0;
-  const totalApprovals = approvalSteps.length;
+  let onTimeApprovals = 0;     // O'z vaqtida tasdiqlangan
+  let lateApprovals = 0;       // Kechikib tasdiqlangan
+  let overdueApprovals = 0;    // Muddati o'tgan, tasdiqlanmagan
+  let inProgressApprovals = 0; // Ijroda, muddat bor hali
 
   approvalSteps.forEach(step => {
-    if (step.stepDeadline && step.actionDate) {
-      if (new Date(step.actionDate) <= new Date(step.stepDeadline)) {
+    const isActed = step.stepStatus !== 'PENDING';
+    const hasDeadline = !!step.stepDeadline;
+
+    if (hasDeadline && step.stepDeadline) {
+      const deadlineDate = new Date(step.stepDeadline);
+      const deadlineTime = deadlineDate.getTime();
+
+      if (isActed) {
+        const actionTime = step.actionDate ? new Date(step.actionDate).getTime() : now;
+        if (actionTime <= deadlineTime) {
+          onTimeApprovals++;
+        } else {
+          lateApprovals++;
+        }
+      } else {
+        if (now > deadlineTime || step.stepStatus === 'EXPIRED') {
+          overdueApprovals++;
+        } else {
+          inProgressApprovals++;
+        }
+      }
+    } else {
+      if (isActed) {
         onTimeApprovals++;
       } else {
-        lateApprovals++;
+        inProgressApprovals++;
       }
-    } else {
-      onTimeApprovals++;
     }
   });
 
+  const totalApprovals = onTimeApprovals + lateApprovals;
+  const evaluatedApprovals = onTimeApprovals + lateApprovals + overdueApprovals;
+  const approverRate = evaluatedApprovals > 0
+    ? Math.round(((onTimeApprovals * 100 + lateApprovals * 50) / evaluatedApprovals))
+    : 100;
+
+  // 2. Ijrochi (Executor) ko'rsatkichlari — 4 xil Svetofor qoidalari:
+  // - Yashil: Berilgan muddat davomida ijro yakunlangan
+  // - Sariq: Ijro yakunlangan, faqat kechikib ijro qilingan
+  // - Qizil: Muddat tugagan va ijro bajarilmagan
+  // - Oq: Ijroda, muddat bor hali
   const executorDocs = await prisma.document.findMany({
-    where: { executorId: userId, status: 'COMPLETED' },
-    select: { overallDeadline: true, completedAt: true }
+    where: { executorId: userId },
+    select: { status: true, overallDeadline: true, completedAt: true }
   });
 
-  let onTimeExecutions = 0;
-  let lateExecutions = 0;
-  const totalExecutions = executorDocs.length;
+  let greenCount = 0;   // YASHIL: Berilgan muddat davomida ijro yakunlangan
+  let yellowCount = 0;  // SARIQ: Ijro yakunlangan, faqat kechikib ijro qilingan
+  let redCount = 0;     // QIZIL: Muddat tugagan va ijro bajarilmagan
+  let whiteCount = 0;   // OQ: Ijroda, muddat bor hali
 
   executorDocs.forEach(doc => {
-    if (doc.overallDeadline && doc.completedAt) {
-      if (new Date(doc.completedAt) <= new Date(doc.overallDeadline)) {
-        onTimeExecutions++;
+    const isCompleted = doc.status === 'COMPLETED';
+    const hasDeadline = !!doc.overallDeadline;
+
+    if (hasDeadline && doc.overallDeadline) {
+      const deadlineDate = new Date(doc.overallDeadline);
+      const deadlineTime = deadlineDate.getTime();
+
+      if (isCompleted) {
+        const completedTime = doc.completedAt ? new Date(doc.completedAt).getTime() : now;
+        if (completedTime <= deadlineTime) {
+          greenCount++; // YASHIL: Berilgan muddat davomida ijro yakunlangan
+        } else {
+          yellowCount++; // SARIQ: Ijro yakunlangan, faqat kechikib ijro qilingan
+        }
       } else {
-        lateExecutions++;
+        if (now > deadlineTime || doc.status === 'EXPIRED') {
+          redCount++; // QIZIL: Muddat tugagan va ijro bajarilmagan
+        } else {
+          whiteCount++; // OQ: Ijroda, muddat bor hali
+        }
       }
     } else {
-      onTimeExecutions++;
+      if (isCompleted) {
+        greenCount++; // YASHIL
+      } else {
+        whiteCount++; // OQ
+      }
     }
   });
 
+  const totalExecutions = greenCount + yellowCount;
+  const evaluatedExecutions = greenCount + yellowCount + redCount;
+  // O'z vaqtida bajarish 100%, Kechikib bajarilgan (Sariq) 50% hisoblanadi, Qizil (bajarilmagan) 0%
+  const executorRate = evaluatedExecutions > 0
+    ? Math.round(((greenCount * 100 + yellowCount * 50) / evaluatedExecutions))
+    : 100;
+
   const creatorRate = createdDocs > 0 ? Math.round(((createdDocs - rejectedDocsAsCreator) / createdDocs) * 100) : 100;
-  const approverRate = totalApprovals > 0 ? Math.round((onTimeApprovals / totalApprovals) * 100) : 100;
-  const executorRate = totalExecutions > 0 ? Math.round((onTimeExecutions / totalExecutions) * 100) : 100;
-  
-  const hasApprover = totalApprovals > 0;
-  const hasExecutor = totalExecutions > 0;
+
+  const hasApprover = evaluatedApprovals > 0;
+  const hasExecutor = evaluatedExecutions > 0;
   let overallRate = 100;
 
   if (hasApprover && hasExecutor) {
@@ -78,13 +137,23 @@ async function calcKpiForUser(userId: number) {
       totalSteps: totalApprovals,
       onTime: onTimeApprovals,
       late: lateApprovals,
+      overdue: overdueApprovals,
+      inProgress: inProgressApprovals,
       onTimeRate: approverRate
     },
     executor: {
       totalExecutions,
-      onTime: onTimeExecutions,
-      late: lateExecutions,
+      onTime: greenCount,
+      late: yellowCount,
+      overdue: redCount,
+      inProgress: whiteCount,
       onTimeRate: executorRate
+    },
+    trafficBreakdown: {
+      green: greenCount,
+      yellow: yellowCount,
+      red: redCount,
+      white: whiteCount,
     },
     overallRate
   };

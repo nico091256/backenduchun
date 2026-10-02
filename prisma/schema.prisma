@@ -32,11 +32,31 @@ model User {
   // Relations
   createdDocuments    Document[]     @relation("DocumentCreator")
   executedDocuments   Document[]     @relation("DocumentExecutor")
+  coExecutedDocuments DocumentCoExecutor[]
   approvalSteps       ApprovalStep[] @relation("StepApprover")
   taskHistories       TaskHistory[]  @relation("HistoryActor")
   notifications       Notification[] @relation("UserNotifications")
   refreshTokens       RefreshToken[]
   createdTemplates    DocumentTemplate[] @relation("TemplateCreator")
+  delegationsGiven    Delegation[]   @relation("DelegatorUser")
+  delegationsReceived Delegation[]   @relation("DelegateUser")
+  comments            DocumentComment[]
+
+  // Bo'lim va Tashkiliy tuzilma
+  departmentId        Int?
+  dept                Department?    @relation("DepartmentUsers", fields: [departmentId], references: [id], onDelete: SetNull)
+  headedDepts         Department[]   @relation("DepartmentHead")
+
+  // Chiquvchi xatlarni jo'natish
+  dispatchedDocuments Document[]     @relation("DocumentDispatcher")
+  documentVersions    DocumentVersion[] @relation("VersionAuthor")
+
+  // Mustaqil Topshiriqlar (Task Management)
+  createdTasks        Task[]         @relation("TaskCreator")
+  assignedTasks       Task[]         @relation("TaskAssignee")
+  coAssignedTasks     TaskCoAssignee[] @relation("UserCoAssignedTasks")
+  taskComments        TaskComment[]  @relation("UserTaskComments")
+  taskActivities      TaskActivity[] @relation("UserTaskActivities")
 
   @@map("users")
 }
@@ -93,6 +113,15 @@ model Document {
   recipientOrg     String?          // Qabul qiluvchi tashkilot nomi
   deliveryMethod   String?          // Yetkazish usuli: EMAIL, COURIER, POST, ELECTRONIC
 
+  // Chiquvchi xatni rasmiy jo'natish (Official Outbound Dispatch)
+  isDispatched       Boolean        @default(false)
+  dispatchedAt       DateTime?
+  dispatchedToEmail  String?
+  dispatchSubject    String?
+  dispatchNote       String?
+  dispatchedById     Int?
+  dispatchedBy       User?          @relation("DocumentDispatcher", fields: [dispatchedById], references: [id], onDelete: SetNull)
+
   // Bog'langan hujjatlar (Linked / Parent-Child documents)
   parentDocId      Int?
   parentDoc        Document?        @relation("DocumentRelation", fields: [parentDocId], references: [id], onDelete: SetNull)
@@ -103,7 +132,18 @@ model Document {
   history          TaskHistory[]
   notifications    Notification[]
   attachments      DocumentAttachment[]
+  coExecutors      DocumentCoExecutor[]
+  comments         DocumentComment[]
+  currentVersion   Int              @default(1)
+  versions         DocumentVersion[]
+  tasks            Task[]           @relation("DocumentTasks")
 
+  @@index([docType, status])
+  @@index([creatorId])
+  @@index([executorId])
+  @@index([createdAt])
+  @@index([overallDeadline])
+  @@index([senderDocNumber])
   @@map("documents")
 }
 
@@ -159,7 +199,9 @@ model ApprovalStep {
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
 
-  @@unique([documentId, stepOrder])
+  @@unique([documentId, stepOrder, approverId])
+  @@index([documentId, stepOrder])
+  @@index([approverId, stepStatus])
   @@map("approval_steps")
 }
 
@@ -182,6 +224,7 @@ model TaskHistory {
 
   createdAt    DateTime @default(now())
 
+  @@index([documentId, createdAt])
   @@map("task_histories")
 }
 
@@ -204,6 +247,8 @@ model Notification {
 
   createdAt  DateTime @default(now())
 
+  @@index([userId, isRead])
+  @@index([createdAt])
   @@map("notifications")
 }
 
@@ -241,3 +286,230 @@ model DocumentTemplate {
 
   @@map("document_templates")
 }
+
+// ─────────────────────────────────────────────
+// HAM-IJROCHILAR (DOCUMENT CO-EXECUTORS)
+// ─────────────────────────────────────────────
+model DocumentCoExecutor {
+  id         Int      @id @default(autoincrement())
+  documentId Int
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  userId     Int
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@unique([documentId, userId])
+  @@index([userId])
+  @@map("document_co_executors")
+}
+
+// ─────────────────────────────────────────────
+// VAKOLATNI TOPSHIRISH / DELEGATSIYA
+// ─────────────────────────────────────────────
+model Delegation {
+  id              Int       @id @default(autoincrement())
+  delegatorId     Int       // Asl rahbar / tasdiqlovchi
+  delegator       User      @relation("DelegatorUser", fields: [delegatorId], references: [id], onDelete: Cascade)
+  delegateId      Int       // Vaqtincha o'rniga qoluvchi shaxs
+  delegate        User      @relation("DelegateUser", fields: [delegateId], references: [id], onDelete: Cascade)
+  startDate       DateTime  @default(now())
+  endDate         DateTime
+  reason          String?   // "Mehnat ta'tili", "Xizmat safari" va h.k.
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([delegatorId, isActive])
+  @@index([delegateId, isActive])
+  @@map("delegations")
+}
+
+// ─────────────────────────────────────────────
+// HUJJAT BO'YICHA ICHKI MUHOKAMA VA IZOHLAR (DISCUSSION THREAD)
+// ─────────────────────────────────────────────
+model DocumentComment {
+  id         Int      @id @default(autoincrement())
+  content    String
+  documentId Int
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  userId     Int
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([documentId, createdAt])
+  @@index([userId])
+  @@map("document_comments")
+}
+
+// ─────────────────────────────────────────────
+// BO'LIMLAR VA TASHKILIY TUZILMA (ORGANIZATION STRUCTURE)
+// ─────────────────────────────────────────────
+model Department {
+  id          Int          @id @default(autoincrement())
+  name        String       @unique
+  code        String?
+  description String?
+
+  // Ierarxiya: Boshqarma -> Bo'lim -> Sektor
+  parentId    Int?
+  parent      Department?  @relation("DepartmentHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children    Department[] @relation("DepartmentHierarchy")
+
+  // Bo'lim boshlig'i
+  headUserId  Int?
+  headUser    User?        @relation("DepartmentHead", fields: [headUserId], references: [id], onDelete: SetNull)
+
+  // Bo'lim xodimlari
+  users       User[]       @relation("DepartmentUsers")
+
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([parentId])
+  @@index([headUserId])
+  @@map("departments")
+}
+
+// ─────────────────────────────────────────────
+// HUJJAT VERSIYALARI TARIXI (DOCUMENT VERSIONS)
+// ─────────────────────────────────────────────
+model DocumentVersion {
+  id                  Int      @id @default(autoincrement())
+  versionNumber       Int      // 1, 2, 3...
+  title               String
+  description         String
+  fileUrl             String?
+  fileName            String?
+  fileSize            Int?
+  attachmentsSnapshot String?  // JSON string
+  changeNote          String?  // Nima o'zgartirildi
+
+  authorId            Int
+  author              User     @relation("VersionAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+
+  documentId          Int
+  document            Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  createdAt           DateTime @default(now())
+
+  @@index([documentId, versionNumber])
+  @@index([authorId])
+  @@map("document_versions")
+}
+
+// ─────────────────────────────────────────────
+// MUSTAQIL TOPSHIRIQLAR MODULI (TASK MANAGEMENT)
+// ─────────────────────────────────────────────
+model Task {
+  id               Int                @id @default(autoincrement())
+  taskNumber       String             @unique // TOP-2024-0001
+  title            String
+  description      String
+  priority         String             @default("NORMAL") // 'LOW' | 'NORMAL' | 'HIGH' | 'URGENT'
+  status           String             @default("NEW") // 'NEW' | 'IN_PROGRESS' | 'COMPLETED' | 'OVERDUE' | 'CANCELLED'
+  deadline         DateTime?
+
+  viewedAt         DateTime?          // Mas'ul ijrochi ko'rgan vaqt
+  completedAt      DateTime?          // Bajarilgan vaqt
+  resultNote       String?            // Ijro hisoboti
+  resultFileUrl    String?            // Natija hujjati / fayl
+  resultFileName   String?
+  resultFileSize   Int?
+
+  // Yaratuvchi (Topshiriq beruvchi rahbar/boshliq)
+  creatorId        Int
+  creator          User               @relation("TaskCreator", fields: [creatorId], references: [id], onDelete: Restrict)
+
+  // Asosiy mas'ul ijrochi
+  assigneeId       Int?
+  assignee         User?              @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+
+  // Ixtiyoriy: agar topshiriq biror rasmiy xat/hujjat asosida berilgan bo'lsa
+  documentId       Int?
+  document         Document?          @relation("DocumentTasks", fields: [documentId], references: [id], onDelete: SetNull)
+
+  // Bog'langan ma'lumotlar
+  coAssignees      TaskCoAssignee[]
+  attachments      TaskAttachment[]
+  comments         TaskComment[]
+  activities       TaskActivity[]
+
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  @@index([status])
+  @@index([creatorId])
+  @@index([assigneeId])
+  @@index([deadline])
+  @@index([documentId])
+  @@map("tasks")
+}
+
+model TaskCoAssignee {
+  id               Int                @id @default(autoincrement())
+  taskId           Int
+  task             Task               @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  userId           Int
+  user             User               @relation("UserCoAssignedTasks", fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt        DateTime           @default(now())
+
+  @@unique([taskId, userId])
+  @@index([userId])
+  @@map("task_co_assignees")
+}
+
+model TaskAttachment {
+  id               Int                @id @default(autoincrement())
+  fileUrl          String
+  fileName         String
+  fileSize         Int?
+  uploadedById     Int?
+
+  taskId           Int
+  task             Task               @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  createdAt        DateTime           @default(now())
+
+  @@map("task_attachments")
+}
+
+model TaskComment {
+  id               Int                @id @default(autoincrement())
+  comment          String
+  fileUrl          String?
+  fileName         String?
+
+  taskId           Int
+  task             Task               @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  userId           Int
+  user             User               @relation("UserTaskComments", fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt        DateTime           @default(now())
+
+  @@index([taskId])
+  @@map("task_comments")
+}
+
+model TaskActivity {
+  id               Int                @id @default(autoincrement())
+  action           String             // 'CREATED' | 'ASSIGNED' | 'VIEWED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED'
+  description      String
+
+  taskId           Int
+  task             Task               @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  performedById    Int
+  performedBy      User               @relation("UserTaskActivities", fields: [performedById], references: [id], onDelete: Cascade)
+
+  createdAt        DateTime           @default(now())
+
+  @@index([taskId])
+  @@map("task_activities")
+}
+
+
+
+

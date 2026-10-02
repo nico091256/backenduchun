@@ -10,11 +10,21 @@ import {
   closeDocument,
   deleteDocument,
   getDocumentStats,
+  getTaskStats,
   uploadDocumentFile,
   addDocumentAttachment,
   deleteDocumentAttachment,
   viewDocumentAttachment,
+  dispatchDocument,
+  getDocumentVersions,
+  assignExecutorToDocument,
+  getNextDocNumber,
 } from '../controllers/documentController';
+import {
+  getDocumentComments,
+  createDocumentComment,
+  deleteDocumentComment,
+} from '../controllers/commentController';
 import { authenticate } from '../middleware/auth';
 import { requireInitiator } from '../middleware/roleGuard';
 import { upload } from '../middleware/upload';
@@ -23,12 +33,22 @@ const router = Router();
 
 router.use(authenticate);
 
+// Document Versions History
+router.get('/:id/versions', getDocumentVersions);
+
+// Comments / Discussion Thread
+router.get('/:id/comments', getDocumentComments);
+router.post('/:id/comments', createDocumentComment);
+router.delete('/:id/comments/:commentId', deleteDocumentComment);
+
 const createUpload = upload.fields([
   { name: 'file', maxCount: 1 },
   { name: 'files', maxCount: 10 },
 ]);
 
 router.get('/stats', getDocumentStats);
+router.get('/tasks/stats', getTaskStats);
+router.get('/next-number', getNextDocNumber);
 router.get('/', getDocuments);
 router.get('/:id', getDocumentById);
 router.post('/', requireInitiator, createUpload, createDocument);
@@ -40,6 +60,8 @@ router.patch('/:id', requireInitiator, createUpload, updateDocument);
 router.patch('/:id/submit', requireInitiator, submitDocument);
 router.patch('/:id/execute', requireInitiator, upload.single('executionFile'), executeDocument);
 router.patch('/:id/resubmit', requireInitiator, resubmitDocument);
+router.post('/:id/dispatch', dispatchDocument);
+router.post('/:id/assign-executor', assignExecutorToDocument);
 router.patch('/:id/close', closeDocument);
 router.delete('/:id', requireInitiator, deleteDocument);
 

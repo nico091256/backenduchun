@@ -5,6 +5,7 @@ import {
   getApprovalTabs,
   approveStep,
   rejectStep,
+  returnStepForRevision,
   bulkApproveSteps,
 } from '../controllers/approvalController';
 import { authenticate } from '../middleware/auth';
@@ -20,5 +21,6 @@ router.get('/tabs', getApprovalTabs);
 router.post('/bulk-approve', requireApprover, bulkApproveSteps);
 router.post('/:stepId/approve', requireApprover, approveStep);
 router.post('/:stepId/reject', requireApprover, rejectStep);
+router.post('/:stepId/return', requireApprover, returnStepForRevision);
 
 export default router;

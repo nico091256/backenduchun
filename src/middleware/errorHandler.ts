@@ -14,6 +14,11 @@ export const errorHandler = (
     return;
   }
 
+  if (err.name === 'SyntaxError' || (err as any).statusCode === 400 || (err as any).status === 400) {
+    sendError(res, 'Noto\'g\'ri JSON formati', 400);
+    return;
+  }
+
   if (err.name === 'MulterError') {
     sendError(res, 'Fayl yuklashda xatolik: ' + err.message, 400);
     return;

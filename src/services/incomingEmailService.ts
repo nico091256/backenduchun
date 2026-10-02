@@ -127,10 +127,13 @@ class IncomingEmailService {
         testClient = new ImapFlow({
           host,
           port: acc.port,
-          secure: true,
+          secure: acc.port === 993 || acc.port === 465,
           auth: {
             user: acc.user,
             pass: acc.pass,
+          },
+          tls: {
+            rejectUnauthorized: false,
           },
           logger: false,
         });
@@ -171,8 +174,14 @@ class IncomingEmailService {
       }
 
       try {
-        // Find unseen message UIDs
-        const unseenUids = await client.search({ seen: false });
+        // Faqat bugungi kundan boshlab kelgan xatlarni qidirish (since: bugun 00:00:00)
+        const startOfToday = new Date();
+        startOfToday.setHours(0, 0, 0, 0);
+
+        const unseenUids = await client.search({
+          seen: false,
+          since: startOfToday,
+        });
         if (!unseenUids || unseenUids.length === 0) {
           return;
         }
@@ -192,6 +201,14 @@ class IncomingEmailService {
             if (!message || !message.source) continue;
 
             const parsed: ParsedMail = await simpleParser(message.source);
+
+            // Bugungacha bo'lgan eski xat bo'lsa, o'tkazib yuborish
+            const emailDate = parsed.date ? new Date(parsed.date) : new Date();
+            if (emailDate < startOfToday) {
+              await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
+              continue;
+            }
+
             await this.processSingleEmail(parsed, adminUser.id, acc.name);
 
             // Mark message as SEEN
@@ -229,13 +246,38 @@ class IncomingEmailService {
     const subject = parsed.subject || 'Sarlavhasiz Xat';
     const sender = parsed.from?.text || parsed.from?.value?.[0]?.address || 'Noma\'lum Jo\'natuvchi';
     const bodyText = parsed.text || (parsed.html ? parsed.html.replace(/<[^>]+>/g, ' ') : 'Matnsiz xat');
-    const senderDate = parsed.date || new Date();
+    const senderDate = parsed.date ? new Date(parsed.date) : new Date();
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+
+    // Qat'iy qoida: Faqat bugundan boshlab kelgan xatlarni qabul qilish
+    if (senderDate < startOfToday) {
+      console.log(`⏩ [IncomingEmailService] Bugungacha bo'lgan eski xat saqlanmadi (${senderDate.toISOString()}): ${subject}`);
+      return;
+    }
+
     const senderDocNum = parsed.messageId ? parsed.messageId.substring(0, 50) : null;
+
+    // Check if email already processed to prevent duplicate imports
+    if (senderDocNum) {
+      const existing = await prisma.document.findFirst({
+        where: { senderDocNumber: senderDocNum },
+      });
+      if (existing) {
+        return;
+      }
+    }
 
     // Generate unique docNumber
     const year = new Date().getFullYear();
-    const randomSuffix = Math.floor(1000 + Math.random() * 9000);
-    const docNumber = `IN-EMAIL-${year}-${randomSuffix}`;
+    let counter = await prisma.document.count({
+      where: { docNumber: { startsWith: `IN-EMAIL-${year}` } },
+    });
+    let docNumber = `IN-EMAIL-${year}-${String(counter + 1).padStart(4, '0')}`;
+    while (await prisma.document.findUnique({ where: { docNumber } })) {
+      counter++;
+      docNumber = `IN-EMAIL-${year}-${String(counter + 1).padStart(4, '0')}`;
+    }
 
     // Handle Upload Directory
     const uploadDir = path.join(process.cwd(), config.uploadDir || 'uploads');
